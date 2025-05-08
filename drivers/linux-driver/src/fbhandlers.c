@@ -15,6 +15,14 @@
 #include "inc/common.h"
 #include "inc/fbhandlers.h"
 #include "inc/usbhandlers.h"
+#include <linux/version.h>
+
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+    #define FB_DEFIO_LIST pagereflist
+#else
+    #define FB_DEFIO_LIST pagelist 
+#endif
 
 static struct fb_info * _default_fb;
 
@@ -26,7 +34,6 @@ struct dirty_rect {
     atomic_t dirty_flag;
 };  
 
-
 enum {
     DISPLAY_UPDATE_HINT_NONE       = 0,
     DISPLAY_UPDATE_HINT_BITBLT     = 1,
@@ -34,7 +41,6 @@ enum {
     DISPLAY_UPDATE_HINT_COPYAREA   = 3,
 
 };
-
 
 struct rpusbdisp_fb_private {
     _u32 pseudo_palette [16];
@@ -47,9 +53,7 @@ struct rpusbdisp_fb_private {
     atomic_t               unsync_flag;
 };
 
-
-
-static struct fb_fix_screeninfo _vfb_fix /*__devinitdata*/ = {
+static struct fb_fix_screeninfo _vfb_fix = {
 	.id =	    "rpusbdisp-fb",
 	.type =		FB_TYPE_PACKED_PIXELS,
 	.visual =	FB_VISUAL_TRUECOLOR,
@@ -58,8 +62,7 @@ static struct fb_fix_screeninfo _vfb_fix /*__devinitdata*/ = {
 
 };
 
-
-static  struct fb_var_screeninfo _var_info /*__devinitdata*/ = {
+static  struct fb_var_screeninfo _var_info = {
     .xres = RP_DISP_DEFAULT_WIDTH,
     .yres = RP_DISP_DEFAULT_HEIGHT,
     .xres_virtual = RP_DISP_DEFAULT_WIDTH,
@@ -74,16 +77,12 @@ static  struct fb_var_screeninfo _var_info /*__devinitdata*/ = {
     .vmode = FB_VMODE_NONINTERLACED,
 };
 
-
 static DEFINE_MUTEX(_mutex_devreg);
-
-
 
 static inline struct rpusbdisp_fb_private * _get_fb_private(struct fb_info * info)
 {
     return (struct rpusbdisp_fb_private *)info->par;
 }
-
 
 static void _clear_dirty_rect(struct dirty_rect * rect) {
     rect->left = RP_DISP_DEFAULT_WIDTH;
@@ -99,9 +98,6 @@ static void _reset_fb_private(struct rpusbdisp_fb_private * pa) {
     pa->binded_usbdev = NULL;
     atomic_set(&pa->unsync_flag, 1);
 }
-
-
-
 
 static  void _display_update( struct fb_info *p, int x, int y, int width, int height, int hint, const void * hint_data)
 {
@@ -180,142 +176,191 @@ static  void _display_update( struct fb_info *p, int x, int y, int width, int he
     }
 final:
     mutex_unlock(&pa->operation_lock);
-
-    
 }
 
-
-static  void _display_fillrect ( struct fb_info * p, const  struct fb_fillrect * rect)
+static  void _display_fillrect( struct fb_info * p, const  struct fb_fillrect * rect)
 {
     sys_fillrect (p, rect);
     _display_update(p, rect->dx, rect->dy, rect->width, rect->height, DISPLAY_UPDATE_HINT_FILLRECT, rect);
 }
 
-static  void _display_imageblit ( struct fb_info * p, const  struct fb_image * image)
+static  void _display_imageblit( struct fb_info * p, const  struct fb_image * image)
 {
 
     sys_imageblit (p, image);
     _display_update(p, image->dx, image->dy, image->width, image->height, DISPLAY_UPDATE_HINT_BITBLT, image);
 }
 
-static  void _display_copyarea ( struct fb_info * p, const  struct fb_copyarea * area)
+// Copy a rectangular area within the framebuffer
+static void _display_copyarea(struct fb_info *p, const struct fb_copyarea *area)
 {
+    // Perform the copy operation
+    sys_copyarea(p, area);
 
-    sys_copyarea (p, area);
+    // Update the display with the copied area
     _display_update(p, area->dx, area->dy, area->width, area->height, DISPLAY_UPDATE_HINT_COPYAREA, area);
 }
 
-static ssize_t _display_write ( struct fb_info * p, const  char * buf __user,
-                                size_t count, loff_t * ppos)
+// Write data to the framebuffer
+static ssize_t _display_write(struct fb_info *p, const char *buf __user, size_t count, loff_t *ppos)
 {       
     int retval;
-    retval = fb_sys_write (p, buf, count, ppos);
 
+    // Write to the framebuffer using the system's framebuffer write function
+    retval = fb_sys_write(p, buf, count, ppos);
+
+    // Update the entire display after writing
     _display_update(p, 0, 0, p->var.width, p->var.height, DISPLAY_UPDATE_HINT_NONE, NULL);
     return retval;
 }
 
-
-static int _display_setcolreg(u_int regno, u_int red, u_int green, u_int blue,
-			 u_int transp, struct fb_info *info)
+// Set the color register for the framebuffer
+static int _display_setcolreg(u_int regno, u_int red, u_int green, u_int blue, u_int transp, struct fb_info *info)
 {
-    #define CNVT_TOHW(val, width) ((((val) << (width)) +0x7FFF-(val)) >> 16)
-    int ret = 1 ;
+    #define CNVT_TOHW(val, width) ((((val) << (width)) + 0x7FFF - (val)) >> 16)
+    int ret = 1;
+
+    // Convert to grayscale if required
     if (info->var.grayscale)
-        red = green = blue = ( 19595 * red + 38470 * green +
-                               7471 * blue) >> 16 ;
+        red = green = blue = (19595 * red + 38470 * green + 7471 * blue) >> 16;
+
+    // Handle different framebuffer visual types
     switch (info->fix.visual) {
     case FB_VISUAL_TRUECOLOR:
-        if (regno < 16 ) {
-            u32 * pal = info->pseudo_palette;
+        if (regno < 16) {
+            u32 *pal = info->pseudo_palette;
             u32 value;
 
-            red = CNVT_TOHW (red, info->var.red.length);
-            green = CNVT_TOHW (green, info->var.green.length);
-            blue = CNVT_TOHW (blue, info->var.blue.length);
-            transp = CNVT_TOHW (transp, info->var.transp.length);
+            // Convert color components to hardware format
+            red = CNVT_TOHW(red, info->var.red.length);
+            green = CNVT_TOHW(green, info->var.green.length);
+            blue = CNVT_TOHW(blue, info->var.blue.length);
+            transp = CNVT_TOHW(transp, info->var.transp.length);
 
+            // Combine the color components into a single value
             value = (red << info->var.red.offset) |
                     (green << info->var.green.offset) |
                     (blue << info->var.blue.offset) |
                     (transp << info->var.transp.offset);
 
+            // Update the pseudo-palette with the calculated value
             pal[regno] = value;
-            ret = 0 ;
+            ret = 0;
         }
-        break ;
+        break;
     case FB_VISUAL_STATIC_PSEUDOCOLOR:
     case FB_VISUAL_PSEUDOCOLOR:
-         break ;
+        break;
     }
     return ret;
 }
 
-
-static void _display_defio_handler(struct fb_info *info,
-				struct list_head *pagelist) {
+// Deferred I/O handler to update the framebuffer
+static void _display_defio_handler(struct fb_info *info, struct list_head *FB_DEFIO_LIST) 
+{
     struct page *cur;
-    struct fb_deferred_io *fbdefio = info->fbdefio;
+    struct fb_deferred_io *fbdefio __maybe_unused = info->fbdefio;
     int top = RP_DISP_DEFAULT_HEIGHT, bottom = 0;
     int current_val;
     unsigned long offset;
     unsigned long page_start;
 
-    struct rpusbdisp_fb_private * pa = _get_fb_private(info);
-    if (!pa->binded_usbdev) return; //simply ignore it 
-    
-    list_for_each_entry(cur, &fbdefio->pagelist, lru) {
+    struct rpusbdisp_fb_private *pa = _get_fb_private(info);
+    if (!pa->binded_usbdev) return;  // No device bound, ignore
 
-        // convert page range to dirty box
-        page_start = (cur->index<<PAGE_SHIFT);
-        
-        if (page_start < info->fix.mmio_start && page_start >= info->fix.mmio_start + info->fix.smem_len) {
+    // Iterate through the deferred I/O page list
+    list_for_each_entry(cur, FB_DEFIO_LIST, lru) {
+        // Get the physical address of the page
+        page_start = page_to_pfn(cur) << PAGE_SHIFT;
+
+        // Check if the page address is within the valid range
+        if (page_start < info->fix.mmio_start || 
+            page_start >= info->fix.mmio_start + info->fix.smem_len) {
             continue;
         }
-        
+
+        // Calculate the offset within the framebuffer
         offset = (unsigned long)(page_start - info->fix.mmio_start);
         current_val = offset / info->fix.line_length;
-        if (top>current_val) top = current_val;
-        current_val = (offset + PAGE_SIZE + info->fix.line_length -1 )/ info->fix.line_length;
-        if (bottom<current_val) bottom = current_val;
-
+        
+        // Update the top boundary of the dirty region
+        if (top > current_val) 
+            top = current_val;
+        
+        // Calculate the bottom boundary of the dirty region
+        current_val = (offset + PAGE_SIZE + info->fix.line_length - 1) / info->fix.line_length;
+        if (bottom < current_val) 
+            bottom = current_val;
     }
-    if (bottom >= RP_DISP_DEFAULT_HEIGHT) bottom = RP_DISP_DEFAULT_HEIGHT - 1;
 
+    // Adjust the bottom limit to prevent overflow
+    if (bottom >= RP_DISP_DEFAULT_HEIGHT) 
+        bottom = RP_DISP_DEFAULT_HEIGHT - 1;
 
+    // Update the display with the calculated dirty region
     _display_update(info, 0, top, info->var.width, bottom - top + 1, DISPLAY_UPDATE_HINT_NONE, NULL);
 }
 
-static  struct fb_ops _display_fbops /*__devinitdata*/ = {
+static int rpusbdisp_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+{
+    unsigned long start = (unsigned long)info->screen_base;
+    unsigned long size  = info->fix.smem_len;
+    unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+    unsigned long virt, phys;
+    int ret = 0;
+
+    if (offset >= size)
+        return -EINVAL;
+
+    size   -= offset;
+    virt    = start + offset;
+
+    while (size > 0) {
+        phys = vmalloc_to_pfn((void *)virt);
+        ret  = remap_pfn_range(vma, vma->vm_start,
+                               phys,
+                               PAGE_SIZE,
+                               vma->vm_page_prot);
+        if (ret)
+            return ret;
+
+        vma->vm_start += PAGE_SIZE;
+        virt          += PAGE_SIZE;
+        size          -= PAGE_SIZE;
+    }
+    return 0;
+}
+
+static struct fb_ops _display_fbops = {
     .owner = THIS_MODULE,
     .fb_read = fb_sys_read,
-    .fb_write =     _display_write,
-    .fb_fillrect =  _display_fillrect,
-    .fb_copyarea =  _display_copyarea,
+    .fb_write = _display_write,
+    .fb_fillrect = _display_fillrect,
+    .fb_copyarea = _display_copyarea,
     .fb_imageblit = _display_imageblit,
     .fb_setcolreg = _display_setcolreg,
+    .fb_mmap = rpusbdisp_fb_mmap,
 };
-
 
 static void *rvmalloc(unsigned long size)
 {
-	void *mem;
-	unsigned long adr;
+    void *mem;
+    unsigned long adr;
 
-	size = PAGE_ALIGN(size);
-	mem = vmalloc_32(size);
-	if (!mem)
-		return NULL;
+    size = PAGE_ALIGN(size);
+    mem = vmalloc(size);
+    if (!mem)
+        return NULL;
 
-	memset(mem, 0, size); /* Clear the ram out, no junk to the user */
-	adr = (unsigned long) mem;
-	while (size > 0) {
-		SetPageReserved(vmalloc_to_page((void *)adr));
-		adr += PAGE_SIZE;
-		size -= PAGE_SIZE;
-	}
+    memset(mem, 0, size);
+    adr = (unsigned long) mem;
+    while (size > 0) {
+        SetPageReserved(vmalloc_to_page((void *)adr));
+        adr += PAGE_SIZE;
+        size -= PAGE_SIZE;
+    }
 
-	return mem;
+    return mem;
 }
 
 static void rvfree(void *mem, unsigned long size)
@@ -334,17 +379,13 @@ static void rvfree(void *mem, unsigned long size)
 	vfree(mem);
 }
 
-
-
-
 #if 0
-
 static struct platform_driver rpusbdisp_fb_driver = {
-	.probe		= _rpusbdisp_initial_probe,
-	.remove		= __devexit_p(_rpusbdisp_final_remove),
-	.driver		= {
-		.owner	= THIS_MODULE,
-		.name	= "rpusbdisp-fb",
+	.probe = _rpusbdisp_initial_probe,
+	.remove = _rpusbdisp_final_remove,
+	.driver = {
+		.owner = THIS_MODULE,
+		.name = "rpusbdisp-fb",
 	},
 };
 #endif
@@ -431,8 +472,6 @@ static int _on_create_new_fb(struct fb_info ** out_fb, struct rpusbdisp_dev *dev
     *out_fb = fb;
     return ret;
 
-
-
 failed_on_reg:
     kfree(fbdefio);
 failed_nodefio:
@@ -443,7 +482,6 @@ failed_nofb:
     framebuffer_release(fb);
 failed:
     return ret;
-
 }
 
 static void _on_release_fb(struct fb_info * fb)
@@ -458,12 +496,9 @@ static void _on_release_fb(struct fb_info * fb)
     fb_dealloc_cmap(&fb->cmap);
     rvfree(fb->screen_base, fb->fix.smem_len);
     framebuffer_release(fb);
-
-    
 }
 
-
-int __init register_fb_handlers(void)
+int __init_or_module register_fb_handlers(void)
 {
     return _on_create_new_fb(&_default_fb, NULL);
 }
@@ -472,7 +507,6 @@ void unregister_fb_handlers(void)
 {
     _on_release_fb(_default_fb);
 }
-
 
 void fbhandler_on_all_transfer_done(struct rpusbdisp_dev * dev)
 {
@@ -485,16 +519,14 @@ void fbhandler_on_all_transfer_done(struct rpusbdisp_dev * dev)
     fb_pri = _get_fb_private(fb);
     
     if (atomic_read(&fb_pri->dirty_rect.dirty_flag) || atomic_read(&fb_pri->unsync_flag)==1) {
-        _display_update(fb, 0, 0, RP_DISP_DEFAULT_WIDTH, RP_DISP_DEFAULT_HEIGHT,   DISPLAY_UPDATE_HINT_NONE, NULL);
+        _display_update(fb, 0, 0, RP_DISP_DEFAULT_WIDTH, RP_DISP_DEFAULT_HEIGHT, DISPLAY_UPDATE_HINT_NONE, NULL);
     }
-
 }
 
-
-int fbhandler_on_new_device(struct rpusbdisp_dev * dev)
+int fbhandler_on_new_device(struct rpusbdisp_dev *dev)
 {
     int ans = -1;
-    struct rpusbdisp_fb_private * fb_pri;
+    struct rpusbdisp_fb_private *fb_pri;
     
     mutex_lock(&_mutex_devreg);
 
@@ -507,7 +539,6 @@ int fbhandler_on_new_device(struct rpusbdisp_dev * dev)
         fb_pri->binded_usbdev = dev;
         rpusbdisp_usb_set_fbhandle(dev, _default_fb);
 
-
         ans = 0; 
         mutex_unlock(&fb_pri->operation_lock);
     }
@@ -516,26 +547,27 @@ int fbhandler_on_new_device(struct rpusbdisp_dev * dev)
     return ans;
 }
 
-void fbhandler_on_remove_device(struct rpusbdisp_dev * dev)
+// Remove the device from the framebuffer
+void fbhandler_on_remove_device(struct rpusbdisp_dev *dev) 
 {
-    // perform unbinding
-    struct fb_info * fb = (struct fb_info *)rpusbdisp_usb_get_fbhandle(dev);
+    struct fb_info *fb = (struct fb_info *)rpusbdisp_usb_get_fbhandle(dev);
 
+    // Acquire the mutex for safe device removal
     mutex_lock(&_mutex_devreg);
-    
-    if (fb) {
-        struct rpusbdisp_fb_private * fb_pri = _get_fb_private(_default_fb);
 
+    if (fb) {
+        struct rpusbdisp_fb_private *fb_pri = _get_fb_private(_default_fb);
+
+        // Acquire the operation lock
         mutex_lock(&fb_pri->operation_lock);
 
-        // unbind them
+        // Unbind the device
         fb_pri->binded_usbdev = NULL;
         rpusbdisp_usb_set_fbhandle(dev, NULL);
-        
+
         mutex_unlock(&fb_pri->operation_lock);
 
-
-        // unregister the fb
+        // Unregister the framebuffer if it is not the default one
         if (fb != _default_fb) {
             _on_release_fb(fb);
         }
@@ -544,15 +576,13 @@ void fbhandler_on_remove_device(struct rpusbdisp_dev * dev)
     mutex_unlock(&_mutex_devreg);
 }
 
-void fbhandler_set_unsync_flag(struct rpusbdisp_dev * dev)
+// Set the unsynchronized flag for the device
+void fbhandler_set_unsync_flag(struct rpusbdisp_dev *dev) 
 {
-    struct fb_info * fb = (struct fb_info *)rpusbdisp_usb_get_fbhandle(dev);
-    struct rpusbdisp_fb_private * fb_pri;
-    
-    if (!fb) return;
+    struct fb_info *fb = (struct fb_info *)rpusbdisp_usb_get_fbhandle(dev);
 
-    fb_pri = _get_fb_private(_default_fb);
-
-    atomic_set(&fb_pri->unsync_flag, 1);
-
+    if (fb) {
+        struct rpusbdisp_fb_private *fb_pri = _get_fb_private(_default_fb);
+        atomic_set(&fb_pri->unsync_flag, 1);
+    }
 }
