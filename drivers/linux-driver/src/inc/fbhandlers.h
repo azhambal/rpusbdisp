@@ -15,6 +15,9 @@
 #ifndef _RPUSBDISP_FBHANDLERS_H
 #define _RPUSBDISP_FBHANDLERS_H
 
+// Forward declaration
+struct rpusbdisp_dev;
+struct fb_info;
 
 int register_fb_handlers(void);
 void unregister_fb_handlers(void);
@@ -27,4 +30,3 @@ void fbhandler_on_all_transfer_done(struct rpusbdisp_dev * dev);
 void fbhandler_set_unsync_flag(struct rpusbdisp_dev * dev);
 
 #endif
-

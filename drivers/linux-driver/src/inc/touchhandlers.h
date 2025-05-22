@@ -15,6 +15,9 @@
 #ifndef _RPUSBDISP_TOUCH_HANDLERS_H
 #define _RPUSBDISP_TOUCH_HANDLERS_H
 
+// Forward declarations
+struct rpusbdisp_dev;
+struct input_dev;
 
 int register_touch_handler(void);
 void unregister_touch_handler(void);
@@ -24,5 +27,5 @@ int touchhandler_on_new_device(struct rpusbdisp_dev * dev);
 void touchhandler_on_remove_device(struct rpusbdisp_dev * dev);
 
 void touchhandler_send_ts_event(struct rpusbdisp_dev * dev, int x, int y, int touch);
-#endif
 
+#endif
