@@ -135,6 +135,50 @@ NTSTATUS DisplayEvtReleaseHardware(WDFDEVICE device,
 }
 
 _Use_decl_annotations_
+VOID DisplayEvtSurpriseRemoval(WDFDEVICE device)
+{
+    TRACE_FUNCTION_ENTRY(TRACE_DEVICE);
+    TRACE_WARNING(TRACE_DEVICE, "Display device surprise removal detected");
+
+    auto* context = GetDisplayContext(device);
+
+    // Stop present thread if active
+    if (context->SwapChainCtx.PresentThread != nullptr)
+    {
+        TRACE_INFO(TRACE_DISPLAY, "Stopping present thread due to device removal");
+        context->SwapChainCtx.ShouldStop = TRUE;
+        KeSetEvent(&context->SwapChainCtx.StopEvent, IO_NO_INCREMENT, FALSE);
+
+        // Wait for thread to terminate (with timeout)
+        LARGE_INTEGER timeout;
+        timeout.QuadPart = -10000000LL;  // 1 second timeout (negative = relative)
+
+        NTSTATUS waitStatus = KeWaitForSingleObject(context->SwapChainCtx.PresentThread,
+                                                     Executive,
+                                                     KernelMode,
+                                                     FALSE,
+                                                     &timeout);
+
+        if (waitStatus == STATUS_TIMEOUT)
+        {
+            TRACE_WARNING(TRACE_DISPLAY, "Present thread did not stop within timeout");
+        }
+        else
+        {
+            TRACE_INFO(TRACE_DISPLAY, "Present thread stopped successfully");
+        }
+
+        context->SwapChainCtx.PresentThread = nullptr;
+    }
+
+    // Close USB transport target to prevent further frame transmission attempts
+    PipelineTeardown();
+
+    TRACE_INFO(TRACE_DEVICE, "Surprise removal cleanup complete");
+    TRACE_FUNCTION_EXIT(TRACE_DEVICE);
+}
+
+_Use_decl_annotations_
 NTSTATUS DisplayEvtAdapterInitFinished(IDDCX_ADAPTER adapter, const IDARG_IN_ADAPTER_INIT_FINISHED* args)
 {
     TRACE_FUNCTION_ENTRY(TRACE_DISPLAY);

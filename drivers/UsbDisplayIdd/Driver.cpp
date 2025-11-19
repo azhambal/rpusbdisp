@@ -52,6 +52,7 @@ NTSTATUS DisplayEvtDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit)
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
     pnpCallbacks.EvtDevicePrepareHardware = DisplayEvtPrepareHardware;
     pnpCallbacks.EvtDeviceReleaseHardware = DisplayEvtReleaseHardware;
+    pnpCallbacks.EvtDeviceSurpriseRemoval = DisplayEvtSurpriseRemoval;
     WdfDeviceInitSetPnpPowerEventCallbacks(deviceInit, &pnpCallbacks);
 
     WDF_OBJECT_ATTRIBUTES attributes;

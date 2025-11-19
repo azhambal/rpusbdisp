@@ -243,6 +243,71 @@ VOID UsbDeviceIoDeviceControl(_In_ WDFQUEUE queue,
         status = WdfMemoryCopyFromBuffer(outputMemory, 0, &touchData, sizeof(RPUSB_TOUCH_DATA));
         break;
     }
+    case IOCTL_RPUSB_PUSH_FRAME_CHUNK:
+        if (inputBufferLength < sizeof(RPUSB_CHUNK_HEADER))
+        {
+            TRACE_ERROR(TRACE_IOCTL, "IOCTL_RPUSB_PUSH_FRAME_CHUNK: Buffer too small (%Iu bytes, expected %Iu)",
+                        inputBufferLength, sizeof(RPUSB_CHUNK_HEADER));
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        else
+        {
+            WDFMEMORY inputMemory;
+            status = WdfRequestRetrieveInputMemory(request, &inputMemory);
+            if (!NT_SUCCESS(status))
+            {
+                TRACE_ERROR(TRACE_IOCTL, "WdfRequestRetrieveInputMemory failed: %!STATUS!", status);
+                break;
+            }
+
+            auto* chunkHeader = reinterpret_cast<RPUSB_CHUNK_HEADER*>(WdfMemoryGetBuffer(inputMemory, nullptr));
+            if (chunkHeader->ChunkBytes == 0 || chunkHeader->TotalChunks == 0 ||
+                chunkHeader->ChunkIndex >= chunkHeader->TotalChunks)
+            {
+                TRACE_ERROR(TRACE_IOCTL, "IOCTL_RPUSB_PUSH_FRAME_CHUNK: Invalid chunk parameters (Index=%lu, Total=%lu, Bytes=%lu)",
+                            chunkHeader->ChunkIndex, chunkHeader->TotalChunks, chunkHeader->ChunkBytes);
+                status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            TRACE_VERBOSE(TRACE_IOCTL, "IOCTL_RPUSB_PUSH_FRAME_CHUNK: Frame#%lu Chunk[%lu/%lu] %lux%lu %lu bytes",
+                          chunkHeader->FrameId,
+                          chunkHeader->ChunkIndex + 1, chunkHeader->TotalChunks,
+                          chunkHeader->Width, chunkHeader->Height,
+                          chunkHeader->ChunkBytes);
+
+            // Send chunk via USB bulk out
+            status = WdfUsbTargetPipeWriteSynchronously(context->BulkOut,
+                                                         request,
+                                                         nullptr,
+                                                         inputMemory,
+                                                         nullptr);
+            if (NT_SUCCESS(status))
+            {
+                // Update statistics only on last chunk
+                if (chunkHeader->ChunkIndex == chunkHeader->TotalChunks - 1)
+                {
+                    context->Statistics.FramesSubmitted++;
+                    context->Statistics.BytesTransferred += chunkHeader->TotalBytes;
+                    TRACE_VERBOSE(TRACE_IOCTL, "Frame #%lu transmitted (Total frames: %llu, bytes: %llu)",
+                                  chunkHeader->FrameId,
+                                  context->Statistics.FramesSubmitted,
+                                  context->Statistics.BytesTransferred);
+                }
+                else
+                {
+                    TRACE_VERBOSE(TRACE_IOCTL, "Chunk %lu/%lu transmitted",
+                                  chunkHeader->ChunkIndex + 1, chunkHeader->TotalChunks);
+                }
+            }
+            else
+            {
+                TRACE_ERROR(TRACE_IOCTL, "WdfUsbTargetPipeWriteSynchronously failed for chunk %lu/%lu: %!STATUS!",
+                            chunkHeader->ChunkIndex + 1, chunkHeader->TotalChunks, status);
+            }
+        }
+        break;
     default:
         TRACE_WARNING(TRACE_IOCTL, "Unknown IOCTL: 0x%08lX", ioControlCode);
         status = STATUS_INVALID_DEVICE_REQUEST;

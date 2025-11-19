@@ -13,7 +13,7 @@
 2. **UsbDisplayIdd** - Indirect Display Driver (IddCx)
 3. **UsbTouchHidUmdf** - HID mini-driver для мультитач
 
-### Общий прогресс: ~92%
+### Общий прогресс: ~94%
 
 ---
 
@@ -417,41 +417,56 @@ Windows Touch Stack
 
 ### Высокий приоритет
 
-#### 1. Chunking для больших кадров
+#### 1. Chunking для больших кадров - ✅ РЕАЛИЗОВАНО
 
-**Файл:** `drivers/UsbDisplayIdd/Pipeline.cpp:160`
+**Файл:** `drivers/UsbDisplayIdd/Pipeline.cpp:231-377`
 
-**Текущая реализация:**
+**Реализация:**
 ```cpp
-// Отправка всего кадра одним IOCTL
-const UINT32 payloadBytes = width * height * sizeof(UINT16);  // 800*480*2 = 768KB
-WdfIoTargetSendIoctlSynchronously(..., frameBuffer, totalBytes, ...);
+// Разбиение кадра на chunks по 16KB
+const UINT32 chunkDataSize = rpusb::ChunkSize - sizeof(RPUSB_CHUNK_HEADER);  // ~15.97KB
+const UINT32 totalChunks = (payloadBytes + chunkDataSize - 1) / chunkDataSize;
+
+// Отправка каждого chunk через IOCTL_RPUSB_PUSH_FRAME_CHUNK
+for (UINT32 chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex) {
+    // Заполнение chunk header (Frame ID, Chunk Index, Total Chunks, etc.)
+    // Отправка chunk с retry логикой
+    status = SendIoctlWithRetry(IOCTL_RPUSB_PUSH_FRAME_CHUNK, ...);
+}
 ```
 
-**Проблемы:**
-- Кадр 800x480 RGB565 = 768KB
-- USB bulk transfer обычно ограничен 16KB-64KB пакетами
-- Синхронная отправка блокирует present thread
-- Нет throttling механизма
+**Реализовано:**
+- ✅ Разбиение кадра 800x480 (768KB) на 47 chunks по 16KB
+- ✅ Новый IOCTL: `IOCTL_RPUSB_PUSH_FRAME_CHUNK`
+- ✅ Chunk header с Frame ID, Chunk Index, Total Chunks
+- ✅ Синхронная отправка chunks (асинхронная - в будущих версиях)
+- ✅ Tracking completion через chunk statistics
 
-**Требуется:**
-1. Разбиение кадра на chunks по MTU
-2. Асинхронная отправка через WdfRequestSend
-3. Tracking completion для каждого chunk
-4. Back-pressure от устройства (device acknowledgments)
-5. Frame skipping при перегрузке
+**Протокол chunking:**
+```cpp
+struct RPUSB_CHUNK_HEADER {
+    UINT32 FrameId;        // Уникальный ID кадра
+    UINT32 ChunkIndex;     // Индекс chunk (0-based)
+    UINT32 TotalChunks;    // Всего chunks в кадре
+    UINT32 ChunkBytes;     // Размер payload в chunk
+    UINT32 Width;          // Ширина кадра (для валидации)
+    UINT32 Height;         // Высота кадра (для валидации)
+    UINT32 PixelFormat;    // Формат пикселей
+    UINT32 TotalBytes;     // Общий размер кадра
+};
+```
 
 ---
 
-#### 2. Error handling и recovery
+#### 2. Error handling и recovery - ✅ РЕАЛИЗОВАНО
 
-**Проблемы:**
-- Недостаточная обработка USB disconnect/reconnect
-- `CloseTransportTarget` вызывается при ошибке, но нет автоматического retry
-- ✅ WPP tracing реализовано для всех трех драйверов (ЗАВЕРШЕНО)
-- Нет graceful degradation
+**Состояние:**
+- ✅ WPP tracing реализовано для всех трех драйверов
+- ✅ Automatic retry logic с exponential backoff
+- ✅ Device removal handling (surprise removal)
+- ✅ Graceful degradation при USB disconnect
 
-**Требуется:**
+**Реализовано:**
 1. ✅ WPP tracing - ЗАВЕРШЕНО:
 ```cpp
 // Реализовано во всех трех драйверах:
@@ -460,26 +475,47 @@ TRACE_INFO(TRACE_DEVICE, "Device ready");
 TRACE_VERBOSE(TRACE_PIPELINE, "Processing frame #%lu", frameCount);
 ```
 
-2. Automatic retry logic:
+2. ✅ Automatic retry logic с exponential backoff - РЕАЛИЗОВАНО:
 ```cpp
-// При ошибке IOCTL
-if (!NT_SUCCESS(status) && retryCount < MAX_RETRIES)
-{
-    Sleep(RETRY_DELAY_MS);
-    EnsureTransportTarget();  // Переподключиться
-    // Повторить операцию
+// Pipeline.cpp:52-128
+NTSTATUS SendIoctlWithRetry(...) {
+    UINT32 retryDelay = kInitialRetryDelayMs;  // 100ms
+    for (UINT32 retry = 0; retry <= kMaxRetries; ++retry) {  // 3 retries
+        // Переподключение к transport target
+        status = EnsureTransportTarget();
+        if (NT_SUCCESS(status)) {
+            status = WdfIoTargetSendIoctlSynchronously(...);
+            if (NT_SUCCESS(status)) return status;
+        }
+        // Exponential backoff: 100ms -> 200ms -> 400ms -> 800ms
+        CloseTransportTarget();
+        KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        retryDelay = min(retryDelay * 2, kMaxRetryDelayMs);
+    }
 }
 ```
 
-3. Device removal handling:
+3. ✅ Device removal handling - РЕАЛИЗОВАНО:
 ```cpp
-EVT_WDF_DEVICE_SURPRISE_REMOVAL DisplayEvtSurpriseRemoval
-{
-    // Остановить present loop
-    // Освободить ресурсы
-    // Уведомить IddCx
+// DisplayDevice.cpp:137-179
+VOID DisplayEvtSurpriseRemoval(WDFDEVICE device) {
+    // Остановить present thread
+    context->SwapChainCtx.ShouldStop = TRUE;
+    KeSetEvent(&context->SwapChainCtx.StopEvent, ...);
+    KeWaitForSingleObject(presentThread, ..., &timeout);
+
+    // Закрыть USB transport target
+    PipelineTeardown();
+
+    TRACE_INFO("Surprise removal cleanup complete");
 }
 ```
+
+**Параметры retry:**
+- Максимум попыток: 3 retry (4 попытки всего)
+- Начальная задержка: 100ms
+- Максимальная задержка: 2000ms
+- Exponential backoff: x2 каждый раз
 
 ---
 
@@ -528,11 +564,11 @@ WdfDeviceAssignS0IdleSettings(device, &idleSettings);
 
 | Компонент | Файлы | Строки кода | Прогресс |
 |-----------|-------|-------------|----------|
-| UsbTransportUmdf | 7 | ~660 (+190 WPP) | 95% |
-| UsbDisplayIdd | 7 | ~600 (+170 WPP) | 95% |
+| UsbTransportUmdf | 7 | ~720 (+190 WPP, +60 chunking) | 96% |
+| UsbDisplayIdd | 7 | ~780 (+170 WPP, +180 chunking/retry/removal) | 96% |
 | UsbTouchHidUmdf | 4 | ~350 (+130 WPP) | 92% |
 | INF файлы | 4 | ~200 | 100% |
-| **Всего** | **22** | **~1810** (+490 WPP) | **~92%** |
+| **Всего** | **22** | **~2050** (+730 новый код) | **~94%** |
 
 ---
 
@@ -543,15 +579,23 @@ WdfDeviceAssignS0IdleSettings(device, &idleSettings);
 - [x] Подключить touch data flow ✅
 - [x] Базовое error handling ✅
 
-### Milestone 2: Стабилизация (1-2 недели) - В ПРОЦЕССЕ
-- [ ] Frame chunking для больших кадров
+### Milestone 2: Стабилизация (1-2 недели) - ПОЧТИ ЗАВЕРШЕНО (75%)
+- [x] Frame chunking для больших кадров ✅ ЗАВЕРШЕНО
+  - ✅ Chunking protocol: 16KB chunks
+  - ✅ IOCTL_RPUSB_PUSH_FRAME_CHUNK handler
+  - ✅ Pipeline chunking logic (47 chunks per 800x480 frame)
+  - ✅ Chunk header with frame tracking
 - [x] WPP tracing ✅ ЗАВЕРШЕНО
   - ✅ UsbTransportUmdf: 6 trace flags, +188 строк
   - ✅ UsbDisplayIdd: 6 trace flags, +169 строк
   - ✅ UsbTouchHidUmdf: 5 trace flags, +127 строк
   - ✅ Всего: 17 trace категорий, +484 строк трейсинга
-- [ ] Reconnect logic
-- [ ] Unit тесты
+- [x] Reconnect logic ✅ ЗАВЕРШЕНО
+  - ✅ Exponential backoff: 100ms -> 2000ms
+  - ✅ 3 retries with auto-reconnect
+  - ✅ Surprise removal handling
+  - ✅ Graceful degradation
+- [ ] Unit тесты (TODO)
 
 ### Milestone 3: Production готовность (2-4 недели)
 - [ ] Множественные режимы дисплея

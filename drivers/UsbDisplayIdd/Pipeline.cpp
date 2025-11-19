@@ -12,6 +12,15 @@
 namespace
 {
     constexpr ULONG kFramePoolTag = 'frpR';
+    constexpr ULONG kChunkPoolTag = 'kcpR';
+
+    // Frame counter for unique frame IDs
+    static volatile LONG g_frameCounter = 0;
+
+    // Reconnect logic parameters
+    constexpr UINT32 kMaxRetries = 3;
+    constexpr UINT32 kInitialRetryDelayMs = 100;   // 100ms initial delay
+    constexpr UINT32 kMaxRetryDelayMs = 2000;      // 2 second max delay
 
     PipelineContext g_context;
 
@@ -38,6 +47,84 @@ namespace
             WdfObjectDelete(g_context.TransportTarget);
             g_context.TransportTarget = nullptr;
         }
+    }
+
+    // Send IOCTL with retry and exponential backoff
+    NTSTATUS SendIoctlWithRetry(_In_ ULONG ioControlCode,
+                                 _In_ PVOID inputBuffer,
+                                 _In_ ULONG inputBufferSize,
+                                 _In_ UINT32 chunkIndex,
+                                 _In_ UINT32 totalChunks)
+    {
+        NTSTATUS status = STATUS_UNSUCCESSFUL;
+        UINT32 retryDelay = kInitialRetryDelayMs;
+
+        for (UINT32 retry = 0; retry <= kMaxRetries; ++retry)
+        {
+            // Ensure transport target is available (reconnect if needed)
+            status = EnsureTransportTarget();
+            if (!NT_SUCCESS(status))
+            {
+                if (retry < kMaxRetries)
+                {
+                    TRACE_WARNING(TRACE_PIPELINE, "Transport target unavailable (attempt %lu/%lu), retrying in %lu ms",
+                                  retry + 1, kMaxRetries + 1, retryDelay);
+
+                    // Use passive-level delay (KeDelayExecutionThread requires IRQL <= APC_LEVEL)
+                    LARGE_INTEGER interval;
+                    interval.QuadPart = -10000LL * retryDelay;  // Convert ms to 100ns units (negative = relative)
+                    KeDelayExecutionThread(KernelMode, FALSE, &interval);
+
+                    // Exponential backoff
+                    retryDelay = min(retryDelay * 2, kMaxRetryDelayMs);
+                    continue;
+                }
+                TRACE_ERROR(TRACE_PIPELINE, "Transport target unavailable after %lu retries", kMaxRetries + 1);
+                return status;
+            }
+
+            // Send IOCTL
+            WDF_MEMORY_DESCRIPTOR inputDesc;
+            WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&inputDesc, inputBuffer, inputBufferSize);
+
+            status = WdfIoTargetSendIoctlSynchronously(g_context.TransportTarget,
+                                                       nullptr,
+                                                       ioControlCode,
+                                                       &inputDesc,
+                                                       nullptr,
+                                                       nullptr);
+
+            if (NT_SUCCESS(status))
+            {
+                // Success
+                if (retry > 0)
+                {
+                    TRACE_INFO(TRACE_PIPELINE, "IOCTL succeeded after %lu retries", retry);
+                }
+                return status;
+            }
+
+            // Failed - close target and retry
+            TRACE_WARNING(TRACE_PIPELINE, "IOCTL failed: %!STATUS! (attempt %lu/%lu, chunk %lu/%lu)",
+                          status, retry + 1, kMaxRetries + 1, chunkIndex + 1, totalChunks);
+
+            CloseTransportTarget();
+
+            if (retry < kMaxRetries)
+            {
+                TRACE_INFO(TRACE_PIPELINE, "Retrying in %lu ms...", retryDelay);
+
+                LARGE_INTEGER interval;
+                interval.QuadPart = -10000LL * retryDelay;
+                KeDelayExecutionThread(KernelMode, FALSE, &interval);
+
+                // Exponential backoff
+                retryDelay = min(retryDelay * 2, kMaxRetryDelayMs);
+            }
+        }
+
+        TRACE_ERROR(TRACE_PIPELINE, "IOCTL failed after %lu retries: %!STATUS!", kMaxRetries + 1, status);
+        return status;
     }
 
     NTSTATUS EnsureTransportTarget()
@@ -224,26 +311,79 @@ void PipelineHandlePresent(_In_ IDDCX_SWAPCHAIN swapChain, _In_ const IDARG_IN_P
 
     surface->Unmap();
 
-    TRACE_VERBOSE(TRACE_PIPELINE, "Sending frame to USB transport (%Iu bytes total)", totalBytes);
+    // Generate unique frame ID
+    UINT32 frameId = InterlockedIncrement(&g_frameCounter);
 
-    // Send frame to USB transport
-    WDF_MEMORY_DESCRIPTOR inputDesc;
-    WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&inputDesc, frameBuffer, static_cast<ULONG>(totalBytes));
+    // Calculate chunking parameters
+    const UINT32 chunkDataSize = rpusb::ChunkSize - sizeof(RPUSB_CHUNK_HEADER);
+    const UINT32 totalChunks = (payloadBytes + chunkDataSize - 1) / chunkDataSize;
 
-    status = WdfIoTargetSendIoctlSynchronously(g_context.TransportTarget,
-                                               nullptr,
-                                               IOCTL_RPUSB_PUSH_FRAME,
-                                               &inputDesc,
-                                               nullptr,
-                                               nullptr);
-    if (!NT_SUCCESS(status))
+    TRACE_VERBOSE(TRACE_PIPELINE, "Sending frame #%lu to USB transport in %lu chunks (%lu bytes total)",
+                  frameId, totalChunks, payloadBytes);
+
+    // Send frame in chunks
+    BOOLEAN allChunksSent = TRUE;
+    for (UINT32 chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex)
     {
-        TRACE_ERROR(TRACE_PIPELINE, "Failed to send frame to USB transport: %!STATUS! (closing transport target)", status);
-        CloseTransportTarget();
+        const UINT32 offset = chunkIndex * chunkDataSize;
+        const UINT32 remainingBytes = payloadBytes - offset;
+        const UINT32 currentChunkDataSize = remainingBytes < chunkDataSize ? remainingBytes : chunkDataSize;
+        const UINT32 chunkTotalSize = sizeof(RPUSB_CHUNK_HEADER) + currentChunkDataSize;
+
+        // Allocate chunk buffer
+        auto* chunkBuffer = static_cast<BYTE*>(ExAllocatePoolWithTag(NonPagedPoolNx, chunkTotalSize, kChunkPoolTag));
+        if (chunkBuffer == nullptr)
+        {
+            TRACE_ERROR(TRACE_PIPELINE, "Failed to allocate chunk buffer (%lu bytes) for chunk %lu/%lu",
+                        chunkTotalSize, chunkIndex + 1, totalChunks);
+            allChunksSent = FALSE;
+            break;
+        }
+
+        // Fill chunk header
+        auto* chunkHeader = reinterpret_cast<RPUSB_CHUNK_HEADER*>(chunkBuffer);
+        chunkHeader->FrameId = frameId;
+        chunkHeader->ChunkIndex = chunkIndex;
+        chunkHeader->TotalChunks = totalChunks;
+        chunkHeader->ChunkBytes = currentChunkDataSize;
+        chunkHeader->Width = width;
+        chunkHeader->Height = height;
+        chunkHeader->PixelFormat = static_cast<UINT32>(rpusb::PixelFormat::Rgb565);
+        chunkHeader->TotalBytes = payloadBytes;
+
+        // Copy chunk data
+        RtlCopyMemory(chunkBuffer + sizeof(RPUSB_CHUNK_HEADER),
+                      pixelData + (offset / sizeof(UINT16)),
+                      currentChunkDataSize);
+
+        // Send chunk with retry logic
+        status = SendIoctlWithRetry(IOCTL_RPUSB_PUSH_FRAME_CHUNK,
+                                     chunkBuffer,
+                                     chunkTotalSize,
+                                     chunkIndex,
+                                     totalChunks);
+
+        ExFreePool(chunkBuffer);
+
+        if (!NT_SUCCESS(status))
+        {
+            TRACE_ERROR(TRACE_PIPELINE, "Failed to send chunk %lu/%lu after retries: %!STATUS!",
+                        chunkIndex + 1, totalChunks, status);
+            allChunksSent = FALSE;
+            break;
+        }
+
+        TRACE_VERBOSE(TRACE_PIPELINE, "Chunk %lu/%lu sent (%lu bytes)", chunkIndex + 1, totalChunks, currentChunkDataSize);
+    }
+
+    if (allChunksSent)
+    {
+        TRACE_VERBOSE(TRACE_PIPELINE, "Frame #%lu sent successfully (%lu chunks, %lu bytes total)",
+                      frameId, totalChunks, payloadBytes);
     }
     else
     {
-        TRACE_VERBOSE(TRACE_PIPELINE, "Frame sent successfully to USB transport");
+        TRACE_ERROR(TRACE_PIPELINE, "Frame #%lu transmission incomplete", frameId);
     }
 
     ExFreePool(frameBuffer);
