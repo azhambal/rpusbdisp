@@ -193,10 +193,10 @@ NTSTATUS DisplayEvtAdapterInitFinished(IDDCX_ADAPTER adapter, const IDARG_IN_ADA
     monitorCreateArgs.MonitorInfo.Size = sizeof(IDDCX_MONITOR_INFO);
     monitorCreateArgs.MonitorInfo.MonitorType = DISPLAYCONFIG_OUTPUT_TECHNOLOGY_USB;
     monitorCreateArgs.MonitorInfo.ConnectorType = DISPLAYCONFIG_CONNECTOR_TYPE_USB;
-    monitorCreateArgs.MonitorInfo.MonitorDescription.pEdid = rpusb::idd::kEdid800x480;
-    monitorCreateArgs.MonitorInfo.MonitorDescription.EdidLength = sizeof(rpusb::idd::kEdid800x480);
+    monitorCreateArgs.MonitorInfo.MonitorDescription.pEdid = rpusb::idd::kEdid320x240;
+    monitorCreateArgs.MonitorInfo.MonitorDescription.EdidLength = sizeof(rpusb::idd::kEdid320x240);
 
-    TRACE_INFO(TRACE_DISPLAY, "Creating monitor (USB, 800x480)");
+    TRACE_INFO(TRACE_DISPLAY, "Creating monitor (USB, 320x240)");
 
     NTSTATUS status = IddCxMonitorCreate(&monitorCreateArgs, &monitorCreate);
     if (!NT_SUCCESS(status))
@@ -205,56 +205,29 @@ NTSTATUS DisplayEvtAdapterInitFinished(IDDCX_ADAPTER adapter, const IDARG_IN_ADA
         return status;
     }
 
-    // Support multiple display modes: 640x480, 800x480, 1024x600
-    IDDCX_MONITOR_MODE modes[3] = {};
+    // Native display mode: 320x240 @ 60Hz (RGB565 - 65536 colors)
+    IDDCX_MONITOR_MODE mode = {};
+    mode.Size = sizeof(IDDCX_MONITOR_MODE);
+    mode.VideoSignalInfo.activeSize.cx = 320;
+    mode.VideoSignalInfo.activeSize.cy = 240;
+    mode.VideoSignalInfo.vSyncFreq.Numerator = 60;
+    mode.VideoSignalInfo.vSyncFreq.Denominator = 1;
+    mode.BitsPerPixel = 16;  // RGB565 = 16 bits per pixel (65536 colors)
+    mode.ColorBasis = IDDCX_COLOR_BASIS_SRGB;
+    mode.PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;  // Windows uses BGRA8888, convert to RGB565
 
-    // Mode 0: 640x480@60Hz
-    modes[0].Size = sizeof(IDDCX_MONITOR_MODE);
-    modes[0].VideoSignalInfo.activeSize.cx = 640;
-    modes[0].VideoSignalInfo.activeSize.cy = 480;
-    modes[0].VideoSignalInfo.vSyncFreq.Numerator = 60;
-    modes[0].VideoSignalInfo.vSyncFreq.Denominator = 1;
-    modes[0].BitsPerPixel = 16;
-    modes[0].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
-    modes[0].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-    // Mode 1: 800x480@60Hz (default)
-    modes[1].Size = sizeof(IDDCX_MONITOR_MODE);
-    modes[1].VideoSignalInfo.activeSize.cx = 800;
-    modes[1].VideoSignalInfo.activeSize.cy = 480;
-    modes[1].VideoSignalInfo.vSyncFreq.Numerator = 60;
-    modes[1].VideoSignalInfo.vSyncFreq.Denominator = 1;
-    modes[1].BitsPerPixel = 16;
-    modes[1].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
-    modes[1].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-    // Mode 2: 1024x600@60Hz
-    modes[2].Size = sizeof(IDDCX_MONITOR_MODE);
-    modes[2].VideoSignalInfo.activeSize.cx = 1024;
-    modes[2].VideoSignalInfo.activeSize.cy = 600;
-    modes[2].VideoSignalInfo.vSyncFreq.Numerator = 60;
-    modes[2].VideoSignalInfo.vSyncFreq.Denominator = 1;
-    modes[2].BitsPerPixel = 16;
-    modes[2].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
-    modes[2].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
-
-    TRACE_INFO(TRACE_DISPLAY, "Registering 3 monitor modes:");
-    for (UINT32 i = 0; i < 3; i++)
-    {
-        TRACE_INFO(TRACE_DISPLAY, "  Mode %lu: %lux%lu@%luHz %u bpp",
-                   i,
-                   modes[i].VideoSignalInfo.activeSize.cx,
-                   modes[i].VideoSignalInfo.activeSize.cy,
-                   modes[i].VideoSignalInfo.vSyncFreq.Numerator / modes[i].VideoSignalInfo.vSyncFreq.Denominator,
-                   modes[i].BitsPerPixel);
-    }
+    TRACE_INFO(TRACE_DISPLAY, "Monitor mode: %lux%lu@%luHz %u bpp (RGB565)",
+               mode.VideoSignalInfo.activeSize.cx,
+               mode.VideoSignalInfo.activeSize.cy,
+               mode.VideoSignalInfo.vSyncFreq.Numerator / mode.VideoSignalInfo.vSyncFreq.Denominator,
+               mode.BitsPerPixel);
 
     IDARG_IN_MONITORARRIVAL arrival = {};
     arrival.AdapterObject = adapter;
     arrival.MonitorObject = monitorCreate.MonitorObject;
-    arrival.MonitorModes = modes;
-    arrival.MonitorModeCount = 3;
-    arrival.DefaultMonitorModeIndex = 1;  // Default to 800x480
+    arrival.MonitorModes = &mode;
+    arrival.MonitorModeCount = 1;
+    arrival.DefaultMonitorModeIndex = 0;
 
     status = IddCxMonitorArrival(&arrival);
     if (NT_SUCCESS(status))

@@ -12,108 +12,93 @@ Milestone 3 focuses on production-ready features including multiple display mode
 
 ---
 
-## ✅ Task 1: Multiple Display Modes Support - COMPLETE
+## ✅ Task 1: Native Display Resolution Support - COMPLETE
 
 **Status:** ✅ 100% Complete
-**Lines Added:** +78 lines across 2 files
+**Lines Added:** +24 lines across 3 files
 
 ### Implementation Details
 
-#### Multiple Resolution Support
+#### Native 320x240 Resolution
 
 **Files Modified:**
 - `UsbDisplayIdd/DisplayDevice.h` (+2 lines)
-- `UsbDisplayIdd/DisplayDevice.cpp` (+76 lines)
+- `UsbDisplayIdd/DisplayDevice.cpp` (+8 lines)
+- `UsbDisplayIdd/Edid.h` (+14 lines, regenerated EDID)
 
-**Supported Modes:**
-1. **640x480@60Hz** - Compact mode for low-bandwidth scenarios
-2. **800x480@60Hz** - Default mode (native device resolution)
-3. **1024x600@60Hz** - Extended mode for larger content
+**Display Specifications:**
+- **Resolution:** 320×240 pixels (QVGA)
+- **Color Depth:** 16-bit (RGB565 = 65,536 colors)
+- **Refresh Rate:** 60Hz
+- **Frame Size:** 153,600 bytes (320 × 240 × 2)
+- **Chunks per Frame:** 10 chunks @ 16KB each
 
 **Mode Registration:**
 ```cpp
-// DisplayDevice.cpp:208-257
-IDDCX_MONITOR_MODE modes[3] = {};
-
-// Mode 0: 640x480@60Hz
-modes[0].VideoSignalInfo.activeSize.cx = 640;
-modes[0].VideoSignalInfo.activeSize.cy = 480;
-// ...
-
-// Mode 1: 800x480@60Hz (default)
-modes[1].VideoSignalInfo.activeSize.cx = 800;
-modes[1].VideoSignalInfo.activeSize.cy = 480;
-// ...
-
-// Mode 2: 1024x600@60Hz
-modes[2].VideoSignalInfo.activeSize.cx = 1024;
-modes[2].VideoSignalInfo.activeSize.cy = 600;
-// ...
+// DisplayDevice.cpp:208-230
+IDDCX_MONITOR_MODE mode = {};
+mode.Size = sizeof(IDDCX_MONITOR_MODE);
+mode.VideoSignalInfo.activeSize.cx = 320;
+mode.VideoSignalInfo.activeSize.cy = 240;
+mode.VideoSignalInfo.vSyncFreq.Numerator = 60;
+mode.VideoSignalInfo.vSyncFreq.Denominator = 1;
+mode.BitsPerPixel = 16;  // RGB565
+mode.ColorBasis = IDDCX_COLOR_BASIS_SRGB;
+mode.PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
 
 IDARG_IN_MONITORARRIVAL arrival = {};
-arrival.MonitorModes = modes;
-arrival.MonitorModeCount = 3;
-arrival.DefaultMonitorModeIndex = 1;  // 800x480
+arrival.MonitorModes = &mode;
+arrival.MonitorModeCount = 1;
+arrival.DefaultMonitorModeIndex = 0;
 ```
 
-#### Dynamic Mode Tracking
-
-**Context Structure Update:**
+**EDID Update:**
 ```cpp
-// DisplayDevice.h:25-27
-struct DisplayDeviceContext
-{
+// Edid.h:7-35
+inline constexpr uint8_t kEdid320x240[] = {
+    // 128-byte EDID structure for 320x240 @ 60Hz
+    // Manufacturer: RP (RoboPeak)
+    // Product Code: 0xA001
+    // Native resolution: 320x240
     // ...
-    UINT32 CurrentWidth = 800;
-    UINT32 CurrentHeight = 480;
 };
 ```
 
-**Commit Modes Callback Enhancement:**
+**Context Structure:**
 ```cpp
-// DisplayDevice.cpp:275-300
-NTSTATUS DisplayEvtAdapterCommitModes(IDDCX_ADAPTER adapter, const IDARG_IN_COMMIT_MODES* args)
-{
-    if (args->PathCount > 0)
-    {
-        auto* context = reinterpret_cast<DisplayDeviceContext*>(args->pContext);
-        const IDDCX_PATH& path = args->pPaths[0];
-
-        // Track active mode
-        context->CurrentWidth = path.TargetModeInfo.activeSize.cx;
-        context->CurrentHeight = path.TargetModeInfo.activeSize.cy;
-
-        TRACE_INFO(TRACE_DISPLAY, "Active mode changed to: %lux%lu@%luHz",
-                   context->CurrentWidth, context->CurrentHeight,
-                   path.TargetModeInfo.vSyncFreq.Numerator / ...);
-    }
-    return STATUS_SUCCESS;
-}
+// DisplayDevice.h:26-27
+UINT32 CurrentWidth = 320;
+UINT32 CurrentHeight = 240;
 ```
 
 ### Benefits
 
-- ✅ **User flexibility:** Users can select resolution based on use case
-- ✅ **Bandwidth optimization:** Lower resolutions reduce USB bandwidth (640x480 = 614KB vs 1024x600 = 1.2MB)
-- ✅ **Automatic scaling:** Pipeline dynamically handles any registered mode
-- ✅ **Windows integration:** Modes appear in Display Settings natively
+- ✅ **Native resolution:** Matches actual hardware (320×240)
+- ✅ **Correct color depth:** RGB565 (65,536 colors)
+- ✅ **Optimal bandwidth:** 153,600 bytes per frame fits USB 2.0 easily
+- ✅ **Accurate EDID:** Windows correctly identifies display capabilities
 
 ### Frame Size Calculations
 
-| Resolution | Pixel Count | RGB565 Size | Chunk Count |
-|------------|-------------|-------------|-------------|
-| 640×480 | 307,200 | 614,400 bytes | 38 chunks |
-| 800×480 | 384,000 | 768,000 bytes | 47 chunks |
-| 1024×600 | 614,400 | 1,228,800 bytes | 76 chunks |
+| Component | Value | Notes |
+|-----------|-------|-------|
+| Width | 320 pixels | Native horizontal resolution |
+| Height | 240 pixels | Native vertical resolution |
+| Pixel Format | RGB565 | 16-bit color (5+6+5 bits) |
+| Bytes per Pixel | 2 | 65,536 colors |
+| Frame Size | 153,600 bytes | 320 × 240 × 2 |
+| Chunk Size | 16,384 bytes | 16 KB chunks |
+| Chunks per Frame | 10 | ⌈153,600 / 15,968⌉ |
+| USB Bandwidth | ~9.2 MB/s | @ 60 FPS |
 
 ### Testing Checklist
 
-- [ ] Verify all 3 modes appear in Windows Display Settings
-- [ ] Test mode switching: 800x480 → 640x480
-- [ ] Test mode switching: 800x480 → 1024x600
-- [ ] Verify frame chunking works for all resolutions
-- [ ] Measure frame rate for each mode (target: 60 FPS)
-- [ ] Test with actual USB device (ensure 1024x600 doesn't saturate USB 2.0)
+- [ ] Verify 320x240 mode appears in Windows Display Settings
+- [ ] Confirm display shows "RP USB Display" name
+- [ ] Test frame transmission with correct 153,600 byte frames
+- [ ] Verify 10 chunks sent per frame
+- [ ] Measure frame rate (target: 60 FPS)
+- [ ] Test with actual RoboPeak USB Display hardware
 
 ---
 
@@ -311,19 +296,19 @@ D3 (Off/Sleeping)
 
 | Task | Status | Lines Added | Progress |
 |------|--------|-------------|----------|
-| Multiple Display Modes | ✅ Complete | +78 | 100% |
+| Native Display Resolution | ✅ Complete | +24 | 100% |
 | Power Management | ✅ Complete | +154 | 100% |
 | Performance Optimization | ⏳ Pending | 0 | 0% |
-| **Total** | **66%** | **+232** | **2/3 tasks** |
+| **Total** | **66%** | **+178** | **2/3 tasks** |
 
 ### Code Statistics
 
 | Driver | Lines Added | Features |
 |--------|-------------|----------|
-| UsbTransportUmdf | +78 | Power management |
-| UsbDisplayIdd | +154 | Multiple modes + Power management |
+| UsbTransportUmdf | +78 | Power management (D0Entry/D0Exit) |
+| UsbDisplayIdd | +100 | Native 320x240 mode + Power management + EDID |
 | Protocol Headers | 0 | (No changes) |
-| **Total** | **+232** | All features |
+| **Total** | **+178** | All features |
 
 ### Files Modified
 

@@ -23,8 +23,8 @@ struct DisplayDeviceContext
     SwapChainContext SwapChainCtx;
 
     // Current active display mode
-    UINT32 CurrentWidth = 800;
-    UINT32 CurrentHeight = 480;
+    UINT32 CurrentWidth = 320;
+    UINT32 CurrentHeight = 240;
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DisplayDeviceContext, GetDisplayContext)
