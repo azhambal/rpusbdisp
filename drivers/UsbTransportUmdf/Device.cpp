@@ -21,6 +21,8 @@ NTSTATUS UsbDeviceCreate(_Inout_ PWDFDEVICE_INIT deviceInit)
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
     pnpCallbacks.EvtDevicePrepareHardware = UsbDevicePrepareHardware;
     pnpCallbacks.EvtDeviceReleaseHardware = UsbDeviceReleaseHardware;
+    pnpCallbacks.EvtDeviceD0Entry = UsbDeviceD0Entry;
+    pnpCallbacks.EvtDeviceD0Exit = UsbDeviceD0Exit;
     WdfDeviceInitSetPnpPowerEventCallbacks(deviceInit, &pnpCallbacks);
 
     WdfDeviceInitSetDeviceType(deviceInit, FILE_DEVICE_UNKNOWN);
@@ -297,4 +299,79 @@ VOID UsbInterruptCompletion(_In_ WDFUSBPIPE pipe,
                           static_cast<UINT8>(packet->PacketType));
             break;
     }
+}
+
+_Use_decl_annotations_
+NTSTATUS UsbDeviceD0Entry(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
+{
+    TRACE_FUNCTION_ENTRY(TRACE_DEVICE);
+
+    DeviceContext* context = GetDeviceContext(device);
+
+    TRACE_INFO(TRACE_DEVICE, "Device entering D0 (working state) from D%lu",
+               previousState - WdfPowerDeviceD0);
+
+    // Device is transitioning to working state
+    // Re-enable USB operations if coming from D3 (off)
+    if (previousState == WdfPowerDeviceD3 || previousState == WdfPowerDeviceD3Final)
+    {
+        TRACE_INFO(TRACE_DEVICE, "Restoring USB device from powered-off state");
+
+        // Restart continuous reader for interrupt endpoint
+        if (context->InterruptIn != nullptr)
+        {
+            NTSTATUS status = WdfIoTargetStart(WdfUsbTargetPipeGetIoTarget(context->InterruptIn));
+            if (!NT_SUCCESS(status))
+            {
+                TRACE_WARNING(TRACE_DEVICE, "Failed to restart interrupt pipe reader: %!STATUS!", status);
+            }
+            else
+            {
+                TRACE_VERBOSE(TRACE_USB, "Interrupt pipe reader restarted");
+            }
+        }
+
+        context->DeviceReady = TRUE;
+        TRACE_INFO(TRACE_DEVICE, "USB device restored to working state");
+    }
+
+    TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_DEVICE, STATUS_SUCCESS);
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS UsbDeviceD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE targetState)
+{
+    TRACE_FUNCTION_ENTRY(TRACE_DEVICE);
+
+    DeviceContext* context = GetDeviceContext(device);
+
+    TRACE_INFO(TRACE_DEVICE, "Device exiting D0 to D%lu state",
+               targetState - WdfPowerDeviceD0);
+
+    // Device is transitioning to low-power or off state
+    if (targetState == WdfPowerDeviceD3 || targetState == WdfPowerDeviceD3Final)
+    {
+        TRACE_INFO(TRACE_DEVICE, "Preparing USB device for powered-off state");
+
+        context->DeviceReady = FALSE;
+
+        // Stop continuous reader for interrupt endpoint to prevent new I/O
+        if (context->InterruptIn != nullptr)
+        {
+            WdfIoTargetStop(WdfUsbTargetPipeGetIoTarget(context->InterruptIn), WdfIoTargetCancelSentIo);
+            TRACE_VERBOSE(TRACE_USB, "Interrupt pipe reader stopped");
+        }
+
+        // Clear touch data buffer
+        WdfSpinLockAcquire(context->TouchData.Lock);
+        context->TouchData.ContactCount = 0;
+        RtlZeroMemory(context->TouchData.Contacts, sizeof(context->TouchData.Contacts));
+        WdfSpinLockRelease(context->TouchData.Lock);
+
+        TRACE_INFO(TRACE_DEVICE, "USB device prepared for low-power state");
+    }
+
+    TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_DEVICE, STATUS_SUCCESS);
+    return STATUS_SUCCESS;
 }

@@ -205,28 +205,56 @@ NTSTATUS DisplayEvtAdapterInitFinished(IDDCX_ADAPTER adapter, const IDARG_IN_ADA
         return status;
     }
 
-    IDDCX_MONITOR_MODE mode = {};
-    mode.Size = sizeof(IDDCX_MONITOR_MODE);
-    mode.VideoSignalInfo.activeSize.cx = 800;
-    mode.VideoSignalInfo.activeSize.cy = 480;
-    mode.VideoSignalInfo.vSyncFreq.Numerator = 60;
-    mode.VideoSignalInfo.vSyncFreq.Denominator = 1;
-    mode.BitsPerPixel = 16;
-    mode.ColorBasis = IDDCX_COLOR_BASIS_SRGB;
-    mode.PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+    // Support multiple display modes: 640x480, 800x480, 1024x600
+    IDDCX_MONITOR_MODE modes[3] = {};
 
-    TRACE_INFO(TRACE_DISPLAY, "Monitor mode: %lux%lu@%luHz %u bpp",
-               mode.VideoSignalInfo.activeSize.cx,
-               mode.VideoSignalInfo.activeSize.cy,
-               mode.VideoSignalInfo.vSyncFreq.Numerator / mode.VideoSignalInfo.vSyncFreq.Denominator,
-               mode.BitsPerPixel);
+    // Mode 0: 640x480@60Hz
+    modes[0].Size = sizeof(IDDCX_MONITOR_MODE);
+    modes[0].VideoSignalInfo.activeSize.cx = 640;
+    modes[0].VideoSignalInfo.activeSize.cy = 480;
+    modes[0].VideoSignalInfo.vSyncFreq.Numerator = 60;
+    modes[0].VideoSignalInfo.vSyncFreq.Denominator = 1;
+    modes[0].BitsPerPixel = 16;
+    modes[0].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
+    modes[0].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    // Mode 1: 800x480@60Hz (default)
+    modes[1].Size = sizeof(IDDCX_MONITOR_MODE);
+    modes[1].VideoSignalInfo.activeSize.cx = 800;
+    modes[1].VideoSignalInfo.activeSize.cy = 480;
+    modes[1].VideoSignalInfo.vSyncFreq.Numerator = 60;
+    modes[1].VideoSignalInfo.vSyncFreq.Denominator = 1;
+    modes[1].BitsPerPixel = 16;
+    modes[1].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
+    modes[1].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    // Mode 2: 1024x600@60Hz
+    modes[2].Size = sizeof(IDDCX_MONITOR_MODE);
+    modes[2].VideoSignalInfo.activeSize.cx = 1024;
+    modes[2].VideoSignalInfo.activeSize.cy = 600;
+    modes[2].VideoSignalInfo.vSyncFreq.Numerator = 60;
+    modes[2].VideoSignalInfo.vSyncFreq.Denominator = 1;
+    modes[2].BitsPerPixel = 16;
+    modes[2].ColorBasis = IDDCX_COLOR_BASIS_SRGB;
+    modes[2].PixelFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+    TRACE_INFO(TRACE_DISPLAY, "Registering 3 monitor modes:");
+    for (UINT32 i = 0; i < 3; i++)
+    {
+        TRACE_INFO(TRACE_DISPLAY, "  Mode %lu: %lux%lu@%luHz %u bpp",
+                   i,
+                   modes[i].VideoSignalInfo.activeSize.cx,
+                   modes[i].VideoSignalInfo.activeSize.cy,
+                   modes[i].VideoSignalInfo.vSyncFreq.Numerator / modes[i].VideoSignalInfo.vSyncFreq.Denominator,
+                   modes[i].BitsPerPixel);
+    }
 
     IDARG_IN_MONITORARRIVAL arrival = {};
     arrival.AdapterObject = adapter;
     arrival.MonitorObject = monitorCreate.MonitorObject;
-    arrival.MonitorModes = &mode;
-    arrival.MonitorModeCount = 1;
-    arrival.DefaultMonitorModeIndex = 0;
+    arrival.MonitorModes = modes;
+    arrival.MonitorModeCount = 3;
+    arrival.DefaultMonitorModeIndex = 1;  // Default to 800x480
 
     status = IddCxMonitorArrival(&arrival);
     if (NT_SUCCESS(status))
@@ -246,13 +274,26 @@ NTSTATUS DisplayEvtAdapterInitFinished(IDDCX_ADAPTER adapter, const IDARG_IN_ADA
 _Use_decl_annotations_
 NTSTATUS DisplayEvtAdapterCommitModes(IDDCX_ADAPTER adapter, const IDARG_IN_COMMIT_MODES* args)
 {
-    UNREFERENCED_PARAMETER(adapter);
-
     TRACE_FUNCTION_ENTRY(TRACE_DISPLAY);
 
     if (args->PathCount > 0)
     {
         TRACE_INFO(TRACE_DISPLAY, "Committing %lu display path(s)", args->PathCount);
+
+        // Get the adapter context to access the device context
+        auto* context = reinterpret_cast<DisplayDeviceContext*>(args->pContext);
+        if (context != nullptr)
+        {
+            // Update current mode from the first path
+            const IDDCX_PATH& path = args->pPaths[0];
+            context->CurrentWidth = path.TargetModeInfo.activeSize.cx;
+            context->CurrentHeight = path.TargetModeInfo.activeSize.cy;
+
+            TRACE_INFO(TRACE_DISPLAY, "Active mode changed to: %lux%lu@%luHz",
+                       context->CurrentWidth,
+                       context->CurrentHeight,
+                       path.TargetModeInfo.vSyncFreq.Numerator / path.TargetModeInfo.vSyncFreq.Denominator);
+        }
     }
 
     TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_DISPLAY, STATUS_SUCCESS);
@@ -367,5 +408,56 @@ NTSTATUS DisplayEvtUnassignSwapChain(IDDCX_MONITOR monitor, const IDARG_IN_UNASS
 
     TRACE_INFO(TRACE_SWAPCHAIN, "Swap-chain unassigned");
     TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_SWAPCHAIN, STATUS_SUCCESS);
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS DisplayEvtD0Entry(WDFDEVICE device, WDF_POWER_DEVICE_STATE previousState)
+{
+    TRACE_FUNCTION_ENTRY(TRACE_DEVICE);
+
+    auto* context = GetDisplayContext(device);
+
+    TRACE_INFO(TRACE_DEVICE, "Display device entering D0 (working state) from D%lu",
+               previousState - WdfPowerDeviceD0);
+
+    // Device is transitioning to working state
+    // Resume display operations if coming from low-power state
+    if (previousState == WdfPowerDeviceD3 || previousState == WdfPowerDeviceD3Final)
+    {
+        TRACE_INFO(TRACE_DEVICE, "Resuming display operations from powered-off state");
+
+        // If there's an active swap-chain, resume present operations
+        if (context->SwapChainCtx.SwapChain != nullptr && context->SwapChainCtx.PresentThread != nullptr)
+        {
+            TRACE_INFO(TRACE_DISPLAY, "Swap-chain present operations will resume automatically");
+        }
+    }
+
+    TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_DEVICE, STATUS_SUCCESS);
+    return STATUS_SUCCESS;
+}
+
+_Use_decl_annotations_
+NTSTATUS DisplayEvtD0Exit(WDFDEVICE device, WDF_POWER_DEVICE_STATE targetState)
+{
+    TRACE_FUNCTION_ENTRY(TRACE_DEVICE);
+
+    auto* context = GetDisplayContext(device);
+
+    TRACE_INFO(TRACE_DEVICE, "Display device exiting D0 to D%lu state",
+               targetState - WdfPowerDeviceD0);
+
+    // Device is transitioning to low-power or off state
+    if (targetState == WdfPowerDeviceD3 || targetState == WdfPowerDeviceD3Final)
+    {
+        TRACE_INFO(TRACE_DEVICE, "Suspending display operations for powered-off state");
+
+        // Present thread will naturally pause when no new frames are available
+        // The USB transport driver will handle stopping USB I/O
+        // No explicit action needed here as the present loop is self-managing
+    }
+
+    TRACE_FUNCTION_EXIT_NTSTATUS(TRACE_DEVICE, STATUS_SUCCESS);
     return STATUS_SUCCESS;
 }
