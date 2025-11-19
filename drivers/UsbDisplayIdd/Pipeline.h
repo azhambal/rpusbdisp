@@ -8,6 +8,7 @@
 
 struct PipelineContext
 {
+    WDFDEVICE ParentDevice = nullptr;
     WDFIOTARGET TransportTarget = nullptr;
 };
 
