@@ -6,6 +6,15 @@
 #include "UsbIoctl.h"
 #include "UsbProtocol.h"
 
+// Touch data ring buffer
+struct TouchDataBuffer
+{
+    rpusb::TouchContact Contacts[rpusb::MaxTouchContacts];
+    UINT8 ContactCount;
+    WDFSPINLOCK Lock;
+    KEVENT DataAvailable;
+};
+
 struct DeviceContext
 {
     WDFUSBDEVICE UsbDevice = nullptr;
@@ -16,6 +25,7 @@ struct DeviceContext
     WDFQUEUE IoctlQueue = nullptr;
     RPUSB_STATISTICS Statistics = {};
     BOOLEAN DeviceReady = FALSE;
+    TouchDataBuffer TouchData = {};
 };
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(DeviceContext, GetDeviceContext)

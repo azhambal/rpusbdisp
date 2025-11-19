@@ -1,4 +1,5 @@
 #include "DisplayDevice.h"
+#include "Pipeline.h"
 
 #include <ntddk.h>
 
@@ -16,6 +17,56 @@ namespace
         args.DriverConfig.Flags.Value = 0;
         args.pAdapterContext = context;
         return args;
+    }
+
+    VOID PresentProcessingThread(_In_ PVOID context)
+    {
+        auto* swapChainCtx = static_cast<SwapChainContext*>(context);
+
+        while (!swapChainCtx->ShouldStop)
+        {
+            // Wait for a short interval or until stop event is signaled
+            LARGE_INTEGER timeout;
+            timeout.QuadPart = -100000LL; // 10ms in 100-nanosecond units (negative for relative)
+
+            NTSTATUS waitStatus = KeWaitForSingleObject(&swapChainCtx->StopEvent,
+                                                        Executive,
+                                                        KernelMode,
+                                                        FALSE,
+                                                        &timeout);
+            if (waitStatus != STATUS_TIMEOUT)
+            {
+                // Stop event was signaled
+                break;
+            }
+
+            // Try to acquire and release a buffer from the swap chain
+            IDARG_OUT_RELEASEANDACQUIREBUFFER buffer = {};
+            NTSTATUS status = IddCxSwapChainReleaseAndAcquireBuffer(swapChainCtx->SwapChain, &buffer);
+
+            if (NT_SUCCESS(status))
+            {
+                // Process the present - PipelineHandlePresent will call IddCxSwapChainFinishedPresent
+                if (buffer.pSurfaceAvailable != nullptr)
+                {
+                    IDARG_IN_PRESENT presentArgs = {};
+                    presentArgs.SurfaceAvailable = *buffer.pSurfaceAvailable;
+                    PipelineHandlePresent(swapChainCtx->SwapChain, &presentArgs);
+                }
+            }
+            else if (status == STATUS_TIMEOUT || status == STATUS_NO_MORE_ENTRIES)
+            {
+                // No buffer available, continue loop
+                continue;
+            }
+            else
+            {
+                // Error occurred, stop processing
+                break;
+            }
+        }
+
+        PsTerminateSystemThread(STATUS_SUCCESS);
     }
 }
 
@@ -112,16 +163,83 @@ NTSTATUS DisplayEvtAdapterCommitModes(IDDCX_ADAPTER adapter, const IDARG_IN_COMM
 _Use_decl_annotations_
 NTSTATUS DisplayEvtAssignSwapChain(IDDCX_MONITOR monitor, const IDARG_IN_ASSIGN_SWAPCHAIN* args)
 {
-    UNREFERENCED_PARAMETER(monitor);
-    UNREFERENCED_PARAMETER(args);
-    // TODO: hook into Pipeline.cpp and start consuming frames.
-    return STATUS_SUCCESS;
+    auto* context = reinterpret_cast<DisplayDeviceContext*>(args->pContext);
+
+    // Tell IddCx we will process frames in software (no GPU acceleration)
+    IDARG_IN_SWAPCHAINSETDEVICE setDevice = {};
+    setDevice.pSwapChain = args->hSwapChain;
+    setDevice.pDevice = nullptr; // Software processing
+
+    NTSTATUS status = IddCxSwapChainSetDevice(&setDevice);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    // Initialize swap-chain context
+    context->SwapChainCtx.SwapChain = args->hSwapChain;
+    context->SwapChainCtx.ShouldStop = FALSE;
+    KeInitializeEvent(&context->SwapChainCtx.StopEvent, NotificationEvent, FALSE);
+
+    // Create the present processing thread
+    HANDLE threadHandle = nullptr;
+    status = PsCreateSystemThread(&threadHandle,
+                                  THREAD_ALL_ACCESS,
+                                  nullptr,
+                                  nullptr,
+                                  nullptr,
+                                  PresentProcessingThread,
+                                  &context->SwapChainCtx);
+
+    if (NT_SUCCESS(status))
+    {
+        // Convert thread handle to thread object
+        status = ObReferenceObjectByHandle(threadHandle,
+                                          THREAD_ALL_ACCESS,
+                                          *PsThreadType,
+                                          KernelMode,
+                                          reinterpret_cast<PVOID*>(&context->SwapChainCtx.PresentThread),
+                                          nullptr);
+        ZwClose(threadHandle);
+
+        if (!NT_SUCCESS(status))
+        {
+            // Failed to reference thread, signal stop and wait for thread to exit
+            context->SwapChainCtx.ShouldStop = TRUE;
+            KeSetEvent(&context->SwapChainCtx.StopEvent, IO_NO_INCREMENT, FALSE);
+        }
+    }
+
+    return status;
 }
 
 _Use_decl_annotations_
 NTSTATUS DisplayEvtUnassignSwapChain(IDDCX_MONITOR monitor, const IDARG_IN_UNASSIGN_SWAPCHAIN* args)
 {
     UNREFERENCED_PARAMETER(monitor);
-    UNREFERENCED_PARAMETER(args);
+
+    auto* context = reinterpret_cast<DisplayDeviceContext*>(args->pContext);
+
+    // Signal the present thread to stop
+    if (context->SwapChainCtx.PresentThread != nullptr)
+    {
+        context->SwapChainCtx.ShouldStop = TRUE;
+        KeSetEvent(&context->SwapChainCtx.StopEvent, IO_NO_INCREMENT, FALSE);
+
+        // Wait for the thread to terminate
+        KeWaitForSingleObject(context->SwapChainCtx.PresentThread,
+                             Executive,
+                             KernelMode,
+                             FALSE,
+                             nullptr);
+
+        // Release the thread object reference
+        ObDereferenceObject(context->SwapChainCtx.PresentThread);
+        context->SwapChainCtx.PresentThread = nullptr;
+    }
+
+    // Clear swap-chain context
+    context->SwapChainCtx.SwapChain = nullptr;
+
     return STATUS_SUCCESS;
 }
