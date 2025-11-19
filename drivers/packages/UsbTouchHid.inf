@@ -1,0 +1,46 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ManufacturerName%
+CatalogFile = UsbTouchHid.cat
+DriverVer   = 07/17/2023,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%TouchDeviceDesc% = Install, ROOT\RPUSB_TOUCH
+
+[Install]
+CopyFiles = DriverCopy
+AddReg    = TouchServiceAddReg
+
+[DriverCopy]
+UsbTouchHidUmdf.dll
+
+[DestinationDirs]
+DriverCopy = 12
+
+[TouchServiceAddReg]
+HKR, , "UmdfLibraryVersion", 0x00010001, "2.33"
+HKR, , "UmdfService", 0x00010001, "UsbTouchHid"
+HKR, , "UmdfServiceOrder", 0x00010001, "UsbTouchHid"
+HKR, , "IdleInWorkingState", 0x00010001, 1
+
+[Install.Services]
+AddService = UsbTouchHid, 0x00000002, TouchServiceInstall
+
+[TouchServiceInstall]
+DisplayName    = %TouchServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\WudfHost.exe
+LoadOrderGroup = Base
+
+[Strings]
+ManufacturerName = "RoboPeak"
+TouchDeviceDesc  = "RoboPeak USB Touch Digitizer"
+TouchServiceDesc = "RoboPeak USB Touch HID Driver"

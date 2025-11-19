@@ -1,0 +1,22 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = USBDevices
+ClassGuid   = {88bae032-5a81-49f0-bc3d-a4ff138216d6}
+Provider    = %ManufacturerName%
+CatalogFile = UsbCompositeExtension.cat
+DriverVer   = 07/17/2023,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%CompositeDesc% = Install, USB\VID_1FC9&PID_0094
+
+[Install]
+Include = usb.inf
+Needs   = UsbHub.Install
+
+[Strings]
+ManufacturerName = "RoboPeak"
+CompositeDesc    = "RoboPeak USB Display Composite Extension"
