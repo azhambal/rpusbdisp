@@ -19,6 +19,11 @@ namespace rpusb
     inline constexpr UINT32 DefaultInterruptPacketBytes = 64;
     inline constexpr UINT32 DefaultMaxFrameBytes = 480 * 320 * 2; // RGB565
 
+    // Frame chunking constants
+    inline constexpr UINT32 ChunkSize = 16 * 1024;  // 16KB chunks for USB bulk transfer
+    inline constexpr UINT32 MaxFrameSize = 800 * 480 * 2;  // 800x480 RGB565 = 768,000 bytes
+    inline constexpr UINT32 MaxChunksPerFrame = (MaxFrameSize + ChunkSize - 1) / ChunkSize;  // 47 chunks
+
     // Touch input protocol structures
     enum class InterruptPacketType : UINT8
     {

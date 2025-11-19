@@ -16,6 +16,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_RPUSB_TRANSPORT,
 #define IOCTL_RPUSB_GET_STATISTICS     CTL_CODE(FILE_DEVICE_RPUSB_TRANSPORT, 0x804, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define IOCTL_RPUSB_REGISTER_LISTENER  CTL_CODE(FILE_DEVICE_RPUSB_TRANSPORT, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_RPUSB_GET_TOUCH_DATA     CTL_CODE(FILE_DEVICE_RPUSB_TRANSPORT, 0x806, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_RPUSB_PUSH_FRAME_CHUNK   CTL_CODE(FILE_DEVICE_RPUSB_TRANSPORT, 0x807, METHOD_OUT_DIRECT, FILE_WRITE_ACCESS)
 
 struct RPUSB_DRIVER_VERSION
 {
@@ -30,6 +31,19 @@ struct RPUSB_FRAME_HEADER
     UINT32 Height;
     UINT32 PixelFormat; // DXGI_FORMAT
     UINT32 PayloadBytes;
+};
+
+// Frame chunk header for chunked transmission
+struct RPUSB_CHUNK_HEADER
+{
+    UINT32 FrameId;        // Unique frame identifier
+    UINT32 ChunkIndex;     // Index of this chunk (0-based)
+    UINT32 TotalChunks;    // Total number of chunks in this frame
+    UINT32 ChunkBytes;     // Size of payload in this chunk
+    UINT32 Width;          // Frame width (present in all chunks for validation)
+    UINT32 Height;         // Frame height (present in all chunks for validation)
+    UINT32 PixelFormat;    // Pixel format (present in all chunks for validation)
+    UINT32 TotalBytes;     // Total frame size in bytes
 };
 
 struct RPUSB_STATISTICS
