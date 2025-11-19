@@ -115,7 +115,7 @@ NTSTATUS UsbDevicePrepareHardware(_In_ WDFDEVICE device,
     if (context->InterruptIn != nullptr)
     {
         WDF_USB_CONTINUOUS_READER_CONFIG readerConfig;
-        WDF_USB_CONTINUOUS_READER_CONFIG_INIT(&readerConfig, UsbInterruptCompletion, rpusb::DefaultBulkPacketBytes);
+        WDF_USB_CONTINUOUS_READER_CONFIG_INIT(&readerConfig, UsbInterruptCompletion, rpusb::DefaultInterruptPacketBytes);
         readerConfig.EvtUsbTargetPipeReadersFailed = nullptr;
         status = WdfUsbTargetPipeConfigContinuousReader(context->InterruptIn, &readerConfig);
         if (!NT_SUCCESS(status))

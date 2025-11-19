@@ -16,5 +16,6 @@ namespace rpusb
     };
 
     inline constexpr UINT32 DefaultBulkPacketBytes = 16 * 1024;
+    inline constexpr UINT32 DefaultInterruptPacketBytes = 64;
     inline constexpr UINT32 DefaultMaxFrameBytes = 480 * 320 * 2; // RGB565
 }

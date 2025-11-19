@@ -120,6 +120,29 @@ VOID UsbDeviceIoDeviceControl(_In_ WDFQUEUE queue,
             }
         }
         break;
+    case IOCTL_RPUSB_SET_MODE:
+    {
+        if (inputBufferLength < sizeof(UINT32))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        WDFMEMORY inputMemory;
+        status = WdfRequestRetrieveInputMemory(request, &inputMemory);
+        if (!NT_SUCCESS(status))
+        {
+            break;
+        }
+
+        auto* mode = reinterpret_cast<UINT32*>(WdfMemoryGetBuffer(inputMemory, nullptr));
+        status = SendVendorControl(context,
+                                   rpusb::kVendorRequestModeSet,
+                                   static_cast<UINT16>(*mode),
+                                   nullptr,
+                                   0);
+        break;
+    }
     case IOCTL_RPUSB_GET_STATISTICS:
     {
         if (outputBufferLength < sizeof(RPUSB_STATISTICS))

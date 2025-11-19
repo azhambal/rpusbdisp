@@ -126,14 +126,20 @@ void PipelineHandlePresent(_In_ IDDCX_SWAPCHAIN swapChain, _In_ const IDARG_IN_P
         return;
     }
 
-    Microsoft::WRL::ComPtr<IDXGISwapChain3> dxgiSwapChain;
-    if (FAILED(swapChain->QueryInterface(dxgiSwapChain.GetAddressOf())))
+    // Acquire buffer from IddCx swap chain using proper IddCx API
+    IDARG_IN_SWAPCHAINGETBUFFER getBuffer = {};
+    getBuffer.pSwapChain = swapChain;
+
+    Microsoft::WRL::ComPtr<IDXGISurface> surface;
+    NTSTATUS status = IddCxSwapChainGetBuffer(&getBuffer, IID_PPV_ARGS(&surface));
+    if (!NT_SUCCESS(status))
     {
         return;
     }
 
-    DXGI_SWAP_CHAIN_DESC1 desc = {};
-    if (FAILED(dxgiSwapChain->GetDesc1(&desc)))
+    // Get surface description
+    DXGI_SURFACE_DESC desc = {};
+    if (FAILED(surface->GetDesc(&desc)))
     {
         return;
     }
@@ -145,18 +151,14 @@ void PipelineHandlePresent(_In_ IDDCX_SWAPCHAIN swapChain, _In_ const IDARG_IN_P
         return;
     }
 
-    Microsoft::WRL::ComPtr<IDXGISurface1> surface;
-    if (FAILED(dxgiSwapChain->GetBuffer(0, IID_PPV_ARGS(&surface))))
-    {
-        return;
-    }
-
+    // Map the surface for reading
     DXGI_MAPPED_RECT mapped = {};
     if (FAILED(surface->Map(&mapped, DXGI_MAP_READ)))
     {
         return;
     }
 
+    // Allocate buffer for RGB565 frame
     const UINT32 payloadBytes = width * height * sizeof(UINT16);
     const size_t totalBytes = sizeof(RPUSB_FRAME_HEADER) + payloadBytes;
     auto* frameBuffer = static_cast<BYTE*>(ExAllocatePoolWithTag(NonPagedPoolNx, totalBytes, kFramePoolTag));
@@ -166,12 +168,14 @@ void PipelineHandlePresent(_In_ IDDCX_SWAPCHAIN swapChain, _In_ const IDARG_IN_P
         return;
     }
 
+    // Fill frame header
     auto* frameHeader = reinterpret_cast<RPUSB_FRAME_HEADER*>(frameBuffer);
     frameHeader->Width = width;
     frameHeader->Height = height;
     frameHeader->PixelFormat = static_cast<UINT32>(rpusb::PixelFormat::Rgb565);
     frameHeader->PayloadBytes = payloadBytes;
 
+    // Convert BGRA to RGB565
     auto* pixelData = reinterpret_cast<UINT16*>(frameHeader + 1);
     for (UINT32 row = 0; row < height; ++row)
     {
@@ -182,15 +186,16 @@ void PipelineHandlePresent(_In_ IDDCX_SWAPCHAIN swapChain, _In_ const IDARG_IN_P
 
     surface->Unmap();
 
+    // Send frame to USB transport
     WDF_MEMORY_DESCRIPTOR inputDesc;
     WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&inputDesc, frameBuffer, static_cast<ULONG>(totalBytes));
 
-    NTSTATUS status = WdfIoTargetSendIoctlSynchronously(g_context.TransportTarget,
-                                                        nullptr,
-                                                        IOCTL_RPUSB_PUSH_FRAME,
-                                                        &inputDesc,
-                                                        nullptr,
-                                                        nullptr);
+    status = WdfIoTargetSendIoctlSynchronously(g_context.TransportTarget,
+                                               nullptr,
+                                               IOCTL_RPUSB_PUSH_FRAME,
+                                               &inputDesc,
+                                               nullptr,
+                                               nullptr);
     if (!NT_SUCCESS(status))
     {
         CloseTransportTarget();
