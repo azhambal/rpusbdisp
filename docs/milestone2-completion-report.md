@@ -84,7 +84,7 @@ tracefmt -o c:\rpusb.txt c:\rpusb.etl
 
 ### Problem Statement
 
-Original implementation sent entire 800x480 RGB565 frames (768,000 bytes) in a single USB bulk transfer. This caused:
+Original implementation sent entire 320x240 RGB565 frames (153,600 bytes) in a single USB bulk transfer. This caused:
 - USB transfer failures (bulk packets typically limited to 16-64KB)
 - Present thread blocking on large transfers
 - No transmission progress tracking
@@ -95,8 +95,8 @@ Original implementation sent entire 800x480 RGB565 frames (768,000 bytes) in a s
 
 **Chunk Parameters:**
 - Chunk size: 16,384 bytes (16KB)
-- 800x480 RGB565 frame: 768,000 bytes
-- Total chunks per frame: 47 chunks
+- 320x240 RGB565 frame: 153,600 bytes
+- Total chunks per frame: 10 chunks
 - Chunk header: 32 bytes
 - Chunk payload: ~15,968 bytes
 

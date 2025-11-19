@@ -123,11 +123,11 @@ This document outlines the unit testing strategy for the RoboPeak USB Display UM
 
 | Test Case | Description | Expected Result |
 |-----------|-------------|-----------------|
-| `TestModeEnumeration` | Verify 3 modes registered | 640x480, 800x480, 1024x600 |
-| `TestDefaultMode` | Verify default mode is 800x480 | DefaultMonitorModeIndex = 1 |
-| `TestModeSwitch640x480` | Switch to 640x480 | CurrentWidth=640, CurrentHeight=480 |
-| `TestModeSwitch1024x600` | Switch to 1024x600 | CurrentWidth=1024, CurrentHeight=600 |
-| `TestCommitModesCallback` | Verify EvtAdapterCommitModes called | Context updated with new mode |
+| `TestModeEnumeration` | Verify single native mode registered | 320x240 @ 60Hz |
+| `TestNativeResolution` | Verify native mode is 320x240 | CurrentWidth=320, CurrentHeight=240 |
+| `TestColorDepth` | Verify RGB565 color depth | BitsPerPixel=16 |
+| `TestRefreshRate` | Verify 60Hz refresh rate | vSyncFreq=60/1 |
+| `TestCommitModesCallback` | Verify EvtAdapterCommitModes called | Context updated with mode info |
 
 #### 2.3 Swap-Chain Tests
 
@@ -151,7 +151,7 @@ This document outlines the unit testing strategy for the RoboPeak USB Display UM
 | `TestBgraToRgb565Green` | Convert #FF00FF00 (green) | RGB565 = 0x07E0 |
 | `TestBgraToRgb565Blue` | Convert #FFFF0000 (blue) | RGB565 = 0x001F |
 | `TestBgraToRgb565Black` | Convert #FF000000 (black) | RGB565 = 0x0000 |
-| `TestBgraToRgb565Performance` | Convert 800x480 frame | Time < 5ms |
+| `TestBgraToRgb565Performance` | Convert 320x240 frame | Time < 2ms |
 
 #### 2.5 Frame Chunking Integration Tests
 
@@ -159,9 +159,9 @@ This document outlines the unit testing strategy for the RoboPeak USB Display UM
 
 | Test Case | Description | Expected Result |
 |-----------|-------------|-----------------|
-| `TestChunkGenerationFor640x480` | 614,400 bytes → 38 chunks | Correct chunk count |
-| `TestChunkGenerationFor800x480` | 768,000 bytes → 47 chunks | Correct chunk count |
-| `TestChunkGenerationFor1024x600` | 1,228,800 bytes → 76 chunks | Correct chunk count |
+| `TestChunkGenerationFor320x240` | 153,600 bytes → 10 chunks | Correct chunk count |
+| `TestChunkHeaderPopulation` | Verify chunk headers | FrameId, ChunkIndex, Width=320, Height=240 |
+| `TestFrameSizeCalculation` | Verify frame size | 320 × 240 × 2 = 153,600 bytes |
 
 #### 2.6 Power Management Tests (Milestone 3)
 

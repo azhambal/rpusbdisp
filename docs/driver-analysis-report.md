@@ -60,8 +60,8 @@
 #### Реализованная функциональность:
 - ✅ IddCx adapter инициализация
 - ✅ IddCx monitor создание и регистрация
-- ✅ EDID для дисплея 800x480@60Hz
-- ✅ Monitor mode: 800x480, 16 bpp, sRGB, BGRA8 swap-chain
+- ✅ EDID для дисплея 320x240@60Hz
+- ✅ Monitor mode: 320x240, 16 bpp (RGB565), sRGB, BGRA8 swap-chain
 - ✅ Pipeline обработки кадров:
   - Получение surface через `IddCxSwapChainGetBuffer`
   - Конвертация BGRA8888 → RGB565
@@ -436,7 +436,7 @@ for (UINT32 chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex) {
 ```
 
 **Реализовано:**
-- ✅ Разбиение кадра 800x480 (768KB) на 47 chunks по 16KB
+- ✅ Разбиение кадра 320x240 (153.6KB) на 10 chunks по 16KB
 - ✅ Новый IOCTL: `IOCTL_RPUSB_PUSH_FRAME_CHUNK`
 - ✅ Chunk header с Frame ID, Chunk Index, Total Chunks
 - ✅ Синхронная отправка chunks (асинхронная - в будущих версиях)
@@ -527,15 +527,16 @@ VOID DisplayEvtSurpriseRemoval(WDFDEVICE device) {
 ```cpp
 // Жестко закодирован один режим
 IDDCX_MONITOR_MODE mode = {};
-mode.VideoSignalInfo.activeSize.cx = 800;
-mode.VideoSignalInfo.activeSize.cy = 480;
+mode.VideoSignalInfo.activeSize.cx = 320;
+mode.VideoSignalInfo.activeSize.cy = 240;
 mode.VideoSignalInfo.vSyncFreq.Numerator = 60;
 ```
 
-**Желательно:**
-- Поддержка 640x480, 800x480, 1024x600
-- Разные refresh rates (30Hz, 60Hz)
-- Динамическое переключение через `DisplayEvtAdapterCommitModes`
+**Реализовано:**
+- ✅ Нативное разрешение 320x240 @ 60Hz (соответствует аппаратуре)
+- ✅ RGB565 (65,536 цветов)
+- ✅ Размер кадра: 153,600 байт (10 chunks)
+- ✅ Корректный EDID для 320x240
 
 ---
 

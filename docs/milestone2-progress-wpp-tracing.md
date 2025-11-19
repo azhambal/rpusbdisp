@@ -312,8 +312,8 @@ WPP_CLEANUP(WdfDriverWdmGetDriverObject(driver));
 TRACE_INFO(TRACE_DISPLAY, "Initializing IddCx adapter");
 TRACE_INFO(TRACE_DISPLAY, "IddCx adapter created successfully");
 
-TRACE_INFO(TRACE_DISPLAY, "Creating monitor (USB, 800x480)");
-TRACE_INFO(TRACE_DISPLAY, "Monitor mode: %lux%lu@%luHz %u bpp",
+TRACE_INFO(TRACE_DISPLAY, "Creating monitor (USB, 320x240)");
+TRACE_INFO(TRACE_DISPLAY, "Monitor mode: %lux%lu@%luHz %u bpp (RGB565)",
            mode.VideoSignalInfo.activeSize.cx, mode.VideoSignalInfo.activeSize.cy,
            mode.VideoSignalInfo.vSyncFreq.Numerator / mode.VideoSignalInfo.vSyncFreq.Denominator,
            mode.BitsPerPixel);
@@ -332,7 +332,7 @@ TRACE_INFO(TRACE_PRESENT, "Present processing thread terminated (processed %lu f
 
 **Key Traces Added:**
 - IddCx adapter initialization and cleanup
-- Monitor creation (800x480@60Hz, USB)
+- Monitor creation (320x240@60Hz RGB565, USB)
 - Swap-chain assignment/unassignment
 - Present thread lifecycle (creation, frame counting, termination)
 - Hardware prepare/release events
