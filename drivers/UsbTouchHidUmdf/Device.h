@@ -8,6 +8,7 @@
 struct TouchDeviceContext
 {
     WDFQUEUE DefaultQueue = nullptr;
+    WDFIOTARGET UsbTransportTarget = nullptr;
     ULONG ContactCount = 0;
 };
 

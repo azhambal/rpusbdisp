@@ -161,6 +161,38 @@ VOID UsbDeviceIoDeviceControl(_In_ WDFQUEUE queue,
         status = WdfMemoryCopyFromBuffer(outputMemory, 0, &context->Statistics, sizeof(RPUSB_STATISTICS));
         break;
     }
+    case IOCTL_RPUSB_GET_TOUCH_DATA:
+    {
+        if (outputBufferLength < sizeof(RPUSB_TOUCH_DATA))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        WDFMEMORY outputMemory;
+        status = WdfRequestRetrieveOutputMemory(request, &outputMemory);
+        if (!NT_SUCCESS(status))
+        {
+            break;
+        }
+
+        // Read touch data from device context
+        RPUSB_TOUCH_DATA touchData = {};
+        WdfSpinLockAcquire(context->TouchData.Lock);
+        touchData.ContactCount = context->TouchData.ContactCount;
+        for (UINT32 i = 0; i < rpusb::MaxTouchContacts; ++i)
+        {
+            touchData.Contacts[i].ContactId = context->TouchData.Contacts[i].ContactId;
+            touchData.Contacts[i].TipSwitch = context->TouchData.Contacts[i].TipSwitch;
+            touchData.Contacts[i].InRange = context->TouchData.Contacts[i].InRange;
+            touchData.Contacts[i].X = context->TouchData.Contacts[i].X;
+            touchData.Contacts[i].Y = context->TouchData.Contacts[i].Y;
+        }
+        WdfSpinLockRelease(context->TouchData.Lock);
+
+        status = WdfMemoryCopyFromBuffer(outputMemory, 0, &touchData, sizeof(RPUSB_TOUCH_DATA));
+        break;
+    }
     default:
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;

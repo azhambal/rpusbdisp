@@ -26,8 +26,11 @@ NTSTATUS UsbDeviceCreate(_Inout_ PWDFDEVICE_INIT deviceInit)
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, WDF_NO_EVENT_CALLBACK, WDF_NO_EVENT_CALLBACK, WDF_NO_EVENT_CALLBACK);
     WdfDeviceInitSetFileObjectConfig(deviceInit, &fileConfig, WDF_NO_OBJECT_ATTRIBUTES);
 
+    WDF_OBJECT_ATTRIBUTES deviceAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&deviceAttributes, DeviceContext);
+
     WDFDEVICE device;
-    NTSTATUS status = WdfDeviceCreate(&deviceInit, WDF_NO_OBJECT_ATTRIBUTES, &device);
+    NTSTATUS status = WdfDeviceCreate(&deviceInit, &deviceAttributes, &device);
     if (!NT_SUCCESS(status))
     {
         return status;
@@ -41,6 +44,20 @@ NTSTATUS UsbDeviceCreate(_Inout_ PWDFDEVICE_INIT deviceInit)
 
     DeviceContext* context = GetDeviceContext(device);
     context->Statistics = {};
+
+    // Initialize touch data buffer
+    WDF_OBJECT_ATTRIBUTES lockAttributes;
+    WDF_OBJECT_ATTRIBUTES_INIT(&lockAttributes);
+    lockAttributes.ParentObject = device;
+    status = WdfSpinLockCreate(&lockAttributes, &context->TouchData.Lock);
+    if (!NT_SUCCESS(status))
+    {
+        return status;
+    }
+
+    KeInitializeEvent(&context->TouchData.DataAvailable, SynchronizationEvent, FALSE);
+    context->TouchData.ContactCount = 0;
+    RtlZeroMemory(context->TouchData.Contacts, sizeof(context->TouchData.Contacts));
 
     status = QueueCreate(device);
     return status;
@@ -141,9 +158,70 @@ VOID UsbInterruptCompletion(_In_ WDFUSBPIPE pipe,
                             _In_ size_t numBytesTransferred,
                             _In_ WDFCONTEXT context)
 {
-    UNREFERENCED_PARAMETER(pipe);
-    UNREFERENCED_PARAMETER(buffer);
-    UNREFERENCED_PARAMETER(numBytesTransferred);
     UNREFERENCED_PARAMETER(context);
-    // TODO: translate vendor notifications into events for registered listeners.
+
+    if (numBytesTransferred < sizeof(rpusb::InterruptPacket))
+    {
+        // Packet too small, ignore
+        return;
+    }
+
+    WDFDEVICE device = WdfIoTargetGetDevice(WdfUsbTargetPipeGetIoTarget(pipe));
+    auto* deviceContext = GetDeviceContext(device);
+
+    auto* packet = static_cast<rpusb::InterruptPacket*>(WdfMemoryGetBuffer(buffer, nullptr));
+    if (packet == nullptr)
+    {
+        return;
+    }
+
+    switch (packet->PacketType)
+    {
+        case rpusb::InterruptPacketType::Touch:
+        {
+            // Parse and store touch data
+            WdfSpinLockAcquire(deviceContext->TouchData.Lock);
+
+            // Simple strategy: store the touch contact based on ContactId
+            UINT8 contactId = packet->Data.Touch.ContactId;
+            if (contactId < rpusb::MaxTouchContacts)
+            {
+                deviceContext->TouchData.Contacts[contactId] = packet->Data.Touch;
+
+                // Update contact count
+                // Count how many contacts have TipSwitch set
+                UINT8 activeCount = 0;
+                for (UINT32 i = 0; i < rpusb::MaxTouchContacts; ++i)
+                {
+                    if (deviceContext->TouchData.Contacts[i].TipSwitch)
+                    {
+                        activeCount++;
+                    }
+                }
+                deviceContext->TouchData.ContactCount = activeCount;
+            }
+
+            WdfSpinLockRelease(deviceContext->TouchData.Lock);
+
+            // Signal that new touch data is available
+            KeSetEvent(&deviceContext->TouchData.DataAvailable, IO_NO_INCREMENT, FALSE);
+            break;
+        }
+
+        case rpusb::InterruptPacketType::Status:
+        {
+            // Handle status packet
+            // Update statistics or handle errors
+            if (packet->Data.Status.ErrorCode != 0)
+            {
+                // Log error or update statistics
+                // For now, just ignore
+            }
+            break;
+        }
+
+        default:
+            // Unknown packet type, ignore
+            break;
+    }
 }

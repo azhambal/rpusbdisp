@@ -2,6 +2,21 @@
 
 #include <hidport.h>
 
+// HID Input Report structure matching the report descriptor
+#pragma pack(push, 1)
+struct HID_TOUCH_INPUT_REPORT
+{
+    UINT8 ReportId;         // Report ID (1)
+    UINT8 TipSwitch : 1;    // Tip Switch
+    UINT8 InRange : 1;      // In Range
+    UINT8 Padding : 6;      // Padding (6 bits)
+    UINT8 ContactId;        // Contact ID
+    UINT16 X;               // X coordinate
+    UINT16 Y;               // Y coordinate
+    UINT8 ContactCount;     // Contact Count
+};
+#pragma pack(pop)
+
 inline constexpr UCHAR g_RpTouchReportDescriptor[] = {
     0x05, 0x0D,       // Usage Page (Digitizers)
     0x09, 0x04,       // Usage (Touch Screen)
