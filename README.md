@@ -210,6 +210,11 @@ Besides the Linux kernel driver, we also provide a user mode sdk which is availa
 
 You can find the SDK in the [drivers/usermode-sdk](https://github.com/cnwzhjs/rpusbdisp/tree/master/drivers/usermode-sdk) subdirectory.
 
+Windows Driver Plan
+===================
+
+For a Windows 11 user-mode driver stack (UMDF USB transport, Indirect Display Driver, and HID multitouch mini-driver), see the plan in [docs/windows-umdf-driver-plan.md](docs/windows-umdf-driver-plan.md). It reuses the protocol knowledge from the Linux driver while outlining the Windows-specific architecture, packaging, and HLK validation steps.
+
 Contact Us
 ====================================
 Website: www.RoboPeak.com
