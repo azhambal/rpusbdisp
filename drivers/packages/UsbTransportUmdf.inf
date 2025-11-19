@@ -1,0 +1,54 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = USBDevice
+ClassGuid   = {88bae032-5a81-49f0-bc3d-a4ff138216d6}
+Provider    = %ManufacturerName%
+CatalogFile = UsbTransportUmdf.cat
+DriverVer   = 07/17/2023,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%DeviceDesc% = Install, USB\VID_1FC9&PID_0094
+
+[Install]
+Include    = WINUSB.INF
+Needs      = WINUSB.NT
+CopyFiles  = DriverCopy
+AddReg     = UsbTransportAddReg
+
+[Install.Services]
+Include = WINUSB.INF
+Needs   = WINUSB.NT.Services
+AddService = UsbTransportUmdf, 0x00000002, UsbTransportServiceInstall
+
+[Install.HW]
+AddReg = UsbTransportHwAddReg
+
+[DriverCopy]
+UsbTransportUmdf.dll
+
+[DestinationDirs]
+DriverCopy = 12
+
+[UsbTransportAddReg]
+HKR, , "UmdfLibraryVersion", 0x00010001, 2, 33, 0
+HKR, , "UmdfService", 0x00000000, "UsbTransportUmdf"
+HKR, , "UmdfServiceOrder", 0x00010000, "UsbTransportUmdf"
+
+[UsbTransportHwAddReg]
+HKR, , "LowerFilters", 0x00010008, "WinUsb"
+
+[UsbTransportServiceInstall]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\WUDFRd.sys
+
+[Strings]
+ManufacturerName = "RoboPeak"
+DeviceDesc       = "RoboPeak USB Display Transport"
+ServiceDesc      = "RoboPeak USB Transport UMDF Driver"
