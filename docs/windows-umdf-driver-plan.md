@@ -21,6 +21,10 @@ This document captures a practical, end-to-end plan for creating Windows 11 user
   TouchTester.exe          # visualizes multitouch contacts
 ```
 
+The `drivers/UsbTransportUmdf`, `drivers/UsbDisplayIdd`, and `drivers/UsbTouchHidUmdf` folders now contain UMDF-compatible
+source that mirrors the structure above.  The code intentionally mirrors the Visual Studio driver templates so it can be lifted
+into a WDK solution with minimal editing while still being tracked in this repository.
+
 ## Phase Overview
 1. **USB Transport (UMDF USB client driver)**
    - Start from the Visual Studio "User Mode Driver, USB (UMDF v2)" template.

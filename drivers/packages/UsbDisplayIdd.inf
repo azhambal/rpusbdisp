@@ -1,0 +1,46 @@
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = UsbDisplayIdd.cat
+DriverVer   = 07/17/2023,1.0.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%DeviceDesc% = Install, ROOT\RPUSB_IDD
+
+[Install]
+CopyFiles = DriverCopy
+AddReg    = IddServiceAddReg
+
+[DriverCopy]
+UsbDisplayIdd.dll
+
+[DestinationDirs]
+DriverCopy = 12
+
+[IddServiceAddReg]
+HKR, , "UmdfLibraryVersion", 0x00010001, "2.33"
+HKR, , "UmdfService", 0x00010001, "UsbDisplayIdd"
+HKR, , "UmdfServiceOrder", 0x00010001, "UsbDisplayIdd"
+HKR, , "IdleInWorkingState", 0x00010001, 1
+
+[Install.Services]
+AddService = UsbDisplayIdd, 0x00000002, ServiceInstall
+
+[ServiceInstall]
+DisplayName    = %ServiceDesc%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\WudfHost.exe
+LoadOrderGroup = Base
+
+[Strings]
+ManufacturerName = "RoboPeak"
+DeviceDesc       = "RoboPeak USB Indirect Display"
+ServiceDesc      = "RoboPeak USB Display IddCx Driver"
