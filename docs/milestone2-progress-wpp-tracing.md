@@ -2,7 +2,7 @@
 
 **Date:** 2025-11-19
 **Task:** Integrate WPP Software Tracing (Milestone 2, Task 2)
-**Status:** In Progress (1/3 drivers completed)
+**Status:** COMPLETED (3/3 drivers completed)
 
 ---
 
@@ -272,38 +272,186 @@ tracelog -start ErrorMonitor -guid #8A1F9517-3A8C-4A9E-B5F2-6E8C9B4A7D3E ^
 
 ---
 
+## Completed Work (Continued)
+
+### ✅ UsbDisplayIdd Driver - COMPLETE
+
+**Files Modified:**
+- `drivers/UsbDisplayIdd/Driver.cpp` - 99 lines (was 59)
+- `drivers/UsbDisplayIdd/DisplayDevice.cpp` - 327 lines (was 246)
+- `drivers/UsbDisplayIdd/Pipeline.cpp` - 260 lines (was 212)
+
+**Total Changes:** +169 insertions
+
+#### Driver.cpp Enhancements
+
+**WPP Lifecycle Management:**
+```cpp
+// DriverEntry
+WPP_INIT_TRACING(driverObject, registryPath);
+TRACE_FUNCTION_ENTRY(TRACE_DRIVER);
+TRACE_INFO(TRACE_DRIVER, "RoboPeak USB Display IDD Driver v1.0.0");
+
+// DriverUnload
+TRACE_INFO(TRACE_DRIVER, "RoboPeak USB Display IDD Driver unloading");
+PipelineTeardown();
+WPP_CLEANUP(WdfDriverWdmGetDriverObject(driver));
+```
+
+**Key Traces Added:**
+- Driver initialization and WDF driver creation
+- Device add operations
+- Pipeline initialization
+- Error traces for all failure paths
+- Clean shutdown tracing
+
+#### DisplayDevice.cpp Enhancements
+
+**IddCx Adapter and Monitor Initialization:**
+```cpp
+TRACE_INFO(TRACE_DISPLAY, "Initializing IddCx adapter");
+TRACE_INFO(TRACE_DISPLAY, "IddCx adapter created successfully");
+
+TRACE_INFO(TRACE_DISPLAY, "Creating monitor (USB, 800x480)");
+TRACE_INFO(TRACE_DISPLAY, "Monitor mode: %lux%lu@%luHz %u bpp",
+           mode.VideoSignalInfo.activeSize.cx, mode.VideoSignalInfo.activeSize.cy,
+           mode.VideoSignalInfo.vSyncFreq.Numerator / mode.VideoSignalInfo.vSyncFreq.Denominator,
+           mode.BitsPerPixel);
+```
+
+**Swap-Chain and Present Thread Tracing:**
+```cpp
+TRACE_INFO(TRACE_SWAPCHAIN, "Assigning swap-chain (software processing)");
+TRACE_INFO(TRACE_SWAPCHAIN, "Creating present processing thread");
+TRACE_INFO(TRACE_SWAPCHAIN, "Present processing thread created successfully");
+
+TRACE_INFO(TRACE_PRESENT, "Present processing thread started");
+TRACE_VERBOSE(TRACE_PRESENT, "Processing frame #%lu", frameCount);
+TRACE_INFO(TRACE_PRESENT, "Present processing thread terminated (processed %lu frames)", frameCount);
+```
+
+**Key Traces Added:**
+- IddCx adapter initialization and cleanup
+- Monitor creation (800x480@60Hz, USB)
+- Swap-chain assignment/unassignment
+- Present thread lifecycle (creation, frame counting, termination)
+- Hardware prepare/release events
+- Comprehensive error logging
+
+#### Pipeline.cpp Enhancements
+
+**USB Transport Connection:**
+```cpp
+TRACE_INFO(TRACE_PIPELINE, "Initializing pipeline and connecting to USB transport");
+TRACE_INFO(TRACE_PIPELINE, "Opening USB transport target");
+TRACE_INFO(TRACE_PIPELINE, "USB transport target opened successfully");
+```
+
+**Frame Processing:**
+```cpp
+TRACE_VERBOSE(TRACE_PIPELINE, "Processing frame: %lux%lu BGRA -> RGB565", width, height);
+TRACE_VERBOSE(TRACE_PIPELINE, "Converting BGRA to RGB565 (%lu bytes payload)", payloadBytes);
+TRACE_VERBOSE(TRACE_PIPELINE, "Sending frame to USB transport (%Iu bytes total)", totalBytes);
+TRACE_VERBOSE(TRACE_PIPELINE, "Frame sent successfully to USB transport");
+```
+
+**Key Traces Added:**
+- Pipeline initialization and teardown
+- USB transport target discovery and connection
+- Frame acquisition from swap-chain
+- Surface format validation
+- BGRA to RGB565 pixel conversion
+- Frame transmission to USB transport
+- Frame buffer allocation/deallocation
+- Comprehensive error logging for all failure paths
+
+---
+
+### ✅ UsbTouchHidUmdf Driver - COMPLETE
+
+**Files Modified:**
+- `drivers/UsbTouchHidUmdf/Driver.cpp` - 74 lines (was 29)
+- `drivers/UsbTouchHidUmdf/Device.cpp` - 302 lines (was 220)
+
+**Total Changes:** +127 insertions
+
+#### Driver.cpp Enhancements
+
+**WPP Lifecycle Management:**
+```cpp
+// DriverEntry
+WPP_INIT_TRACING(driverObject, registryPath);
+TRACE_FUNCTION_ENTRY(TRACE_DRIVER);
+TRACE_INFO(TRACE_DRIVER, "RoboPeak USB Touch HID Driver v1.0.0");
+
+// DriverUnload
+TRACE_INFO(TRACE_DRIVER, "RoboPeak USB Touch HID Driver unloading");
+WPP_CLEANUP(WdfDriverWdmGetDriverObject(driver));
+```
+
+**Key Traces Added:**
+- Driver initialization and WDF driver creation
+- HID device add operations
+- Error traces for all failure paths
+- Clean shutdown tracing
+
+#### Device.cpp Enhancements
+
+**HID Device Initialization:**
+```cpp
+TRACE_INFO(TRACE_DEVICE, "Creating HID touch device");
+TRACE_INFO(TRACE_DEVICE, "HID touch device created, setting up IOCTL queue");
+TRACE_INFO(TRACE_DEVICE, "HID touch device initialized successfully");
+```
+
+**USB Transport Connection:**
+```cpp
+TRACE_INFO(TRACE_TOUCH, "Opening USB transport target for touch data");
+TRACE_INFO(TRACE_TOUCH, "USB transport target opened successfully");
+```
+
+**HID IOCTL Tracing:**
+```cpp
+TRACE_VERBOSE(TRACE_HID, "HID IOCTL received: 0x%08lX (InLen=%Iu, OutLen=%Iu)", ioControlCode, ...);
+TRACE_INFO(TRACE_HID, "HID device descriptor returned (ReportDescriptorLength=%u)", ...);
+TRACE_INFO(TRACE_HID, "HID device attributes returned (VID=0x%04X PID=0x%04X Ver=0x%04X)", ...);
+```
+
+**Touch Report Generation:**
+```cpp
+TRACE_VERBOSE(TRACE_REPORT, "Querying USB transport for touch data");
+TRACE_VERBOSE(TRACE_REPORT, "Touch data received: ContactCount=%u", touchData.ContactCount);
+TRACE_VERBOSE(TRACE_REPORT, "HID report generated: Contact=%u TipSwitch=%u InRange=%u X=%u Y=%u",
+              report->ContactId, report->TipSwitch, report->InRange, report->X, report->Y);
+```
+
+**Key Traces Added:**
+- HID device creation and queue setup
+- USB transport target discovery and connection
+- All 4 HID IOCTL handlers instrumented:
+  - IOCTL_HID_GET_DEVICE_DESCRIPTOR
+  - IOCTL_HID_GET_REPORT_DESCRIPTOR
+  - IOCTL_HID_GET_DEVICE_ATTRIBUTES
+  - IOCTL_HID_READ_REPORT
+- Touch data queries from USB transport
+- HID report generation from touch data
+- Contact tracking and reporting
+- Comprehensive error logging
+
+---
+
 ## Next Steps
 
 ### Remaining Work
 
-1. **UsbDisplayIdd Driver** (Pending)
-   - Driver.cpp - WPP init/cleanup
-   - DisplayDevice.cpp - IddCx callbacks
-   - Pipeline.cpp - Frame processing
-
-   **Trace flags:**
-   - TRACE_DISPLAY - IddCx operations
-   - TRACE_PIPELINE - Frame conversion
-   - TRACE_SWAPCHAIN - Swap-chain management
-   - TRACE_PRESENT - Present loop operations
-
-2. **UsbTouchHidUmdf Driver** (Pending)
-   - Driver.cpp - WPP init/cleanup
-   - Device.cpp - HID operations
-
-   **Trace flags:**
-   - TRACE_HID - HID descriptor operations
-   - TRACE_REPORT - Report generation
-   - TRACE_TOUCH - Touch processing
-
-3. **Testing** (Pending)
+1. **Testing** (Pending)
    - Build with WPP preprocessor
    - Collect traces during USB device connection
    - Verify trace output formatting
    - Measure performance impact
    - Create trace collection scripts
 
-4. **Documentation** (Pending)
+2. **Documentation** (Pending)
    - Update driver-analysis-report.md
    - Add troubleshooting guide with trace examples
    - Document common trace patterns
@@ -355,16 +503,38 @@ These files are included after Trace.h and provide the actual trace macros.
 
 ---
 
+## Summary
+
+**Total Changes Across All Drivers:**
+- **UsbTransportUmdf:** +188 insertions, -17 deletions (3 files)
+- **UsbDisplayIdd:** +169 insertions (3 files)
+- **UsbTouchHidUmdf:** +127 insertions (2 files)
+- **Grand Total:** +484 insertions, -17 deletions across 8 driver files
+
+**Trace Categories Implemented:**
+- UsbTransportUmdf: 6 flags (DRIVER, DEVICE, QUEUE, USB, IOCTL, TOUCH)
+- UsbDisplayIdd: 6 flags (DRIVER, DEVICE, DISPLAY, PIPELINE, SWAPCHAIN, PRESENT)
+- UsbTouchHidUmdf: 5 flags (DRIVER, DEVICE, HID, TOUCH, REPORT)
+- **Total: 17 trace categories** across all drivers
+
+**Trace Levels Used:**
+- TRACE_LEVEL_ERROR (2) - All failures and unexpected conditions
+- TRACE_LEVEL_WARNING (3) - Recoverable issues and missing optional components
+- TRACE_LEVEL_INFORMATION (4) - Important milestones and state changes
+- TRACE_LEVEL_VERBOSE (5) - Per-operation details (IOCTLs, frames, touch events)
+
+---
+
 ## Milestone 2 Progress
 
 | Task | Status | Progress |
 |------|--------|----------|
 | Frame chunking | Pending | 0% |
-| **WPP tracing** | **In Progress** | **33%** (1/3 drivers) |
+| **WPP tracing** | **✅ COMPLETE** | **100%** (3/3 drivers) |
 | Reconnect logic | Pending | 0% |
 | Unit tests | Pending | 0% |
 
-**Overall Milestone 2 Progress:** ~8% (1/12 sub-tasks completed)
+**Overall Milestone 2 Progress:** ~25% (3/12 sub-tasks completed)
 
 ---
 
