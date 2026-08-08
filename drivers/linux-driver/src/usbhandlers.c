@@ -41,6 +41,9 @@ static const struct usb_device_id id_table[] = {
 	{ /* Terminating entry */ },
 };
 
+/* exports the usb alias so udev/kmod can autoload this driver on hotplug */
+MODULE_DEVICE_TABLE(usb, id_table);
+
 static atomic_t devlist_count = ATOMIC_INIT(0);
 static LIST_HEAD(rpusbdisp_list);
 static DEFINE_MUTEX(mutex_usbdevlist);
