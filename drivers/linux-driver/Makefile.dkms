@@ -1,0 +1,22 @@
+######################################
+#
+#    RoboPeak USB LCD Display Linux Driver
+#
+#    Kbuild makefile used by the DKMS package.
+#
+#    Unlike the standalone Makefile this one is only ever invoked by
+#    kbuild (make -C <kernel> M=<this dir>), so it must not rely on $(PWD)
+#    - that points at the kernel tree, not at the sources. Use $(src).
+#
+######################################
+
+obj-m := rp_usbdisplay.o
+
+rp_usbdisplay-objs := src/main.o \
+                      src/usbhandlers.o \
+                      src/fbhandlers.o \
+                      src/touchhandlers.o
+
+# src/inc/common.h pulls in "inc/protocol.h", which the DKMS package ships
+# under common/inc/ (it lives outside linux-driver/ in the git tree).
+ccflags-y := -I$(src)/src -I$(src)/common
