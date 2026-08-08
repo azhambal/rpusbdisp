@@ -13,8 +13,8 @@
  */
 
 
+#include "inc/common.h"
 #include "inc/fbhandlers.h"
-#include <linux/framebuffer.h>
 #include <linux/fb.h>
 #include <linux/vmalloc.h>
 #include <linux/mm.h>
@@ -115,9 +115,9 @@ static void display_update(struct fb_info *p, int x, int y, int width, int heigh
 	if (atomic_dec_and_test(&pa->unsync_flag)) {
 		/* force the dirty rect to cover the full display area if the display is not synced. */
 		pa->dirty_rect.left = 0;
-		pa->dirty_rect.right = p->var.width - 1;
+		pa->dirty_rect.right = p->var.xres - 1;
 		pa->dirty_rect.top = 0;
-		pa->dirty_rect.bottom = p->var.height - 1;
+		pa->dirty_rect.bottom = p->var.yres - 1;
 		clear_dirty = 1;
 	} else {
 		if (pa->dirty_rect.top > y)
@@ -159,7 +159,7 @@ static void display_update(struct fb_info *p, int x, int y, int width, int heigh
 		}
 		break;
 		default:
-			if (rpusbdisp_usb_try_send_image(pa->binded_usbdev, (const u16 *)p->fix.smem_start,
+			if (rpusbdisp_usb_try_send_image(pa->binded_usbdev, (const u16 *)p->screen_buffer,
 				 pa->dirty_rect.left, pa->dirty_rect.top, pa->dirty_rect.right, pa->dirty_rect.bottom, p->fix.line_length / (RP_DISP_DEFAULT_PIXEL_BITS / 8),
 				 clear_dirty)) {
 				/* data sent, rect the dirty rect */
@@ -200,7 +200,7 @@ static ssize_t display_write(struct fb_info *p, const char *buf __user, size_t c
 	retval = fb_sys_write(p, buf, count, ppos);
 
 	/* Update the entire display after writing */
-	display_update(p, 0, 0, p->var.width, p->var.height, DISPLAY_UPDATE_HINT_NONE, NULL);
+	display_update(p, 0, 0, p->var.xres, p->var.yres, DISPLAY_UPDATE_HINT_NONE, NULL);
 	return retval;
 }
 
@@ -245,82 +245,56 @@ static int display_setcolreg(u_int regno, u_int red, u_int green, u_int blue, u_
 	#undef CNVT_TOHW
 }
 
-static void display_defio_handler(struct fb_info *info, struct list_head *pagelist) 
+/*
+ * Deferred I/O handler.
+ *
+ * Since kernel 6.2 the list passed here holds struct fb_deferred_io_pageref
+ * entries linked through their ->list member, not struct page linked through
+ * ->lru. Each pageref already carries the byte offset of the touched page
+ * inside the framebuffer, so no pfn/address arithmetic is needed.
+ */
+static void display_defio_handler(struct fb_info *info, struct list_head *pagelist)
 {
-	struct page *cur;
-	struct fb_deferred_io *fbdefio __maybe_unused = info->fbdefio;
-	int top = RP_DISP_DEFAULT_HEIGHT, bottom = 0;
+	struct fb_deferred_io_pageref *pageref;
+	int top = RP_DISP_DEFAULT_HEIGHT, bottom = -1;
 	int current_val;
 	unsigned long offset;
-	unsigned long page_start;
 	struct rpusbdisp_fb_private *pa = get_fb_private(info);
 
 	if (!pa->binded_usbdev) /* No device bound, ignore */
-		return;  
+		return;
 
-	/* Iterate through the deferred I/O page list */
-	list_for_each_entry(cur, pagelist, lru) {
-		/* Get the physical address of the page */
-		page_start = page_to_pfn(cur) << PAGE_SHIFT;
+	list_for_each_entry(pageref, pagelist, list) {
+		offset = pageref->offset;
 
-		/* Check if the page address is within the valid range */
-		if (page_start < info->fix.mmio_start || 
-		    page_start >= info->fix.mmio_start + info->fix.smem_len)
+		if (offset >= info->fix.smem_len)
 			continue;
 
-		/* Calculate the offset within the framebuffer */
-		offset = (unsigned long)(page_start - info->fix.mmio_start);
+		/* first scanline touched by this page */
 		current_val = offset / info->fix.line_length;
-        
-		/* Update the top boundary of the dirty region */
-		if (top > current_val) 
+		if (top > current_val)
 			top = current_val;
-        
-		/* Calculate the bottom boundary of the dirty region */
-		current_val = (offset + PAGE_SIZE + info->fix.line_length - 1) / info->fix.line_length;
-		if (bottom < current_val) 
+
+		/* last scanline touched by this page */
+		current_val = (offset + PAGE_SIZE - 1) / info->fix.line_length;
+		if (bottom < current_val)
 			bottom = current_val;
 	}
 
 	/* Adjust the bottom limit to prevent overflow */
-	if (bottom >= RP_DISP_DEFAULT_HEIGHT) 
+	if (bottom >= RP_DISP_DEFAULT_HEIGHT)
 		bottom = RP_DISP_DEFAULT_HEIGHT - 1;
 
 	/* Update the display with the calculated dirty region */
 	if (top <= bottom) /* Ensure valid rect */
-		display_update(info, 0, top, info->var.width, bottom - top + 1, DISPLAY_UPDATE_HINT_NONE, NULL);
+		display_update(info, 0, top, info->var.xres, bottom - top + 1, DISPLAY_UPDATE_HINT_NONE, NULL);
 }
 
-static int rpusbdisp_fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
-{
-	unsigned long start = (unsigned long)info->screen_base;
-	unsigned long size  = info->fix.smem_len;
-	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
-	unsigned long virt, phys;
-	int ret = 0;
-
-	if (offset >= size)
-		return -EINVAL;
-
-	size -= offset;
-	virt = start + offset;
-
-	while (size > 0) {
-		phys = vmalloc_to_pfn((void *)virt);
-		ret  = remap_pfn_range(vma, vma->vm_start,
-				       phys,
-				       PAGE_SIZE,
-				       vma->vm_page_prot);
-		if (ret)
-			return ret;
-
-		vma->vm_start += PAGE_SIZE;
-		virt += PAGE_SIZE;
-		size -= PAGE_SIZE;
-	}
-	return 0;
-}
-
+/*
+ * fb_mmap must stay fb_deferred_io_mmap: it installs the page-fault handler
+ * that feeds display_defio_handler(). Mapping the vmalloc pages directly
+ * would silently disable all deferred-io screen updates.
+ */
 static struct fb_ops display_fbops = {
 	.owner = THIS_MODULE,
 	.fb_read = fb_sys_read,
@@ -329,7 +303,7 @@ static struct fb_ops display_fbops = {
 	.fb_copyarea = display_copyarea,
 	.fb_imageblit = display_imageblit,
 	.fb_setcolreg = display_setcolreg,
-	.fb_mmap = rpusbdisp_fb_mmap,
+	.fb_mmap = fb_deferred_io_mmap,
 };
 
 
@@ -365,8 +339,9 @@ static int on_create_new_fb(struct fb_info **out_fb, struct rpusbdisp_dev *dev)
 	fb->var = var_info;
 
 	fb->fbops = &display_fbops;
-	fb->flags = FBINFO_DEFAULT | FBINFO_VIRTFB;
-    
+	/* FBINFO_DEFAULT was removed from the kernel in 6.10 and was a no-op (0) before that. */
+	fb->flags = FBINFO_VIRTFB;
+
 	fbmem_size = var_info.yres * vfb_fix.line_length;
 	fbmem = vzalloc(fbmem_size);
 	if (!fbmem) {
@@ -374,10 +349,8 @@ static int on_create_new_fb(struct fb_info **out_fb, struct rpusbdisp_dev *dev)
 		goto failed_nofb;
 	}
 
-	memset(fbmem, 0, fbmem_size);
-
-	fb->screen_base = (char __iomem *)fbmem;
-	fb->fix.smem_start = (unsigned long)fb->screen_base;
+	fb->screen_buffer = fbmem;
+	fb->fix.smem_start = (unsigned long)fbmem;
 	fb->fix.smem_len = fbmem_size;
     
 	fb->pseudo_palette = get_fb_private(fb)->pseudo_palette;
@@ -389,7 +362,8 @@ static int on_create_new_fb(struct fb_info **out_fb, struct rpusbdisp_dev *dev)
 
 	fbdefio = kzalloc(sizeof(struct fb_deferred_io), GFP_KERNEL);
 	if (fbdefio) {
-		fbdefio->delay = HZ / 20; /* TODO: Replace '20' with a proper module parameter for FPS. */
+		/* frame rate is configurable through the fps module parameter */
+		fbdefio->delay = HZ / (fps > 0 ? fps : 16);
 		fbdefio->deferred_io = display_defio_handler;
 	} else {
 		pr_err("Failed to allocate fb_deferred_io structure\n");
@@ -428,13 +402,13 @@ static void on_release_fb(struct fb_info *fb)
 	if (!fb)
 		return;
 
-	/* del the defio */
-	fb_deferred_io_cleanup(fb);
-    
+	/* the fb must be gone from userspace before the defio state is torn down */
 	unregister_framebuffer(fb);
+	fb_deferred_io_cleanup(fb);
+
 	kfree(fb->fbdefio);
 	fb_dealloc_cmap(&fb->cmap);
-	vfree(fb->screen_base);
+	vfree(fb->screen_buffer);
 	framebuffer_release(fb);
 }
 

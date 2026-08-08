@@ -13,6 +13,7 @@
  */
 
 
+#include "inc/common.h"
 #include "inc/touchhandlers.h"
 #include <linux/input.h>
 #include <linux/module.h>
@@ -69,12 +70,12 @@ static int on_create_input_dev(struct input_dev **inputdev)
  */
 static void on_release_input_dev(struct input_dev *inputdev)
 {
-    
+    /*
+     * input_unregister_device() drops the last reference and frees the device.
+     * input_free_device() must NOT be called afterwards - it is only for
+     * devices that were allocated but never successfully registered.
+     */
     input_unregister_device(inputdev);
-    // input_free_device typically called by input_unregister_device if refcount is 0
-    // For explicit cleanup, caller should ensure input_free_device if input_dev is not NULL after this.
-    // However, standard pattern is that input_allocate_device is paired with input_free_device.
-    // input_unregister_device makes it available for freeing if refcount is zero.
 }
 
 
@@ -103,7 +104,6 @@ void unregister_touch_handler(void)
     live_flag = 0;
     if (default_input_dev) { /* Check if it was allocated and registered */
        on_release_input_dev(default_input_dev);
-       input_free_device(default_input_dev); /* Explicitly free after unregistering */
        default_input_dev = NULL; /* Clear the pointer after release */
     }
 }

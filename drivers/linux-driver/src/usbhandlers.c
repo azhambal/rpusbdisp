@@ -11,6 +11,7 @@
  *    USB Driver Implementations
  */
 
+#include "inc/common.h"
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/usb.h>
@@ -97,6 +98,10 @@ struct rpusbdisp_dev {
 	wait_queue_head_t  status_wait_queue;
 	struct urb      *urb_status_query;
 	int            urb_status_fail_count;
+	/* usb_clear_halt() may sleep, so a stalled status endpoint has to be
+	 * recovered from process context instead of the URB completion handler.
+	 */
+	struct work_struct status_halt_work;
 
 	/* display data related */
 	u8         disp_out_ep_addr;
@@ -232,24 +237,43 @@ static void on_status_query_finished(struct urb *urb)
 		/* succeed */
 		/* store the actual transfer size */
 		dev->status_in_buffer_recvsize = urb->actual_length;
-            
+
 		on_parse_status_packet(dev);
 		/* notify the waiters.. */
 		wake_up(&dev->status_wait_queue);
+		/* a good transfer clears the accumulated error budget */
+		dev->urb_status_fail_count = 0;
 		break;
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ESHUTDOWN:
+		/* the urb was unlinked, the device is going away: do not resubmit */
+		return;
 	case -EPIPE:
-		usb_clear_halt(dev->udev, usb_rcvintpipe(dev->udev, dev->status_in_ep_addr));
-		/* Fall-through to default to increment fail count and potentially retry */
+		/* endpoint stalled; recovery needs process context */
+		schedule_work(&dev->status_halt_work);
+		++dev->urb_status_fail_count;
+		break;
 	default:
-		/* Keeping original logic to set to max on error, but after clearing halt. */
-		dev->urb_status_fail_count = RPUSBDISP_STATUS_QUERY_RETRY_COUNT;
+		++dev->urb_status_fail_count;
+		break;
 	}
-    
+
 	if (dev->urb_status_fail_count < RPUSBDISP_STATUS_QUERY_RETRY_COUNT) {
 		status_start_querying(dev);
 	} else {
 		dev_warn_once(&dev->interface->dev, "Status URB query failed after %d retries, last status %d\n", RPUSBDISP_STATUS_QUERY_RETRY_COUNT, urb->status);
 	}
+}
+
+static void on_status_halt_work(struct work_struct *work)
+{
+	struct rpusbdisp_dev *dev = container_of(work, struct rpusbdisp_dev, status_halt_work);
+
+	if (!dev->is_alive)
+		return;
+
+	usb_clear_halt(dev->udev, usb_rcvintpipe(dev->udev, dev->status_in_ep_addr));
 }
 
 
@@ -285,8 +309,9 @@ static void status_start_querying(struct rpusbdisp_dev *dev)
 	status = usb_submit_urb(dev->urb_status_query, GFP_ATOMIC);
 	if (status) {
 		if (status == -EPIPE)
-			usb_clear_halt(dev->udev, pipe);
-		if (status != -EPIPE)
+			/* usb_clear_halt() sleeps; this may run in atomic context */
+			schedule_work(&dev->status_halt_work);
+		else
 			dev_warn_once(&dev->interface->dev, "Failed to submit status URB, status %d\n", status);
 		++dev->urb_status_fail_count;
 	}
@@ -855,7 +880,9 @@ static int on_new_usb_device(struct rpusbdisp_dev *dev)
 	/* the rp-usb-display device has been verified */
 	mutex_init(&dev->op_locker);
 	init_waitqueue_head(&dev->status_wait_queue);
-	
+	INIT_WORK(&dev->status_halt_work, on_status_halt_work);
+
+
 	dev->urb_status_query = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->urb_status_query) {
 		dev_err(&dev->interface->dev, "Cannot allocate status query URB\n");
@@ -909,6 +936,7 @@ static void on_del_usb_device(struct rpusbdisp_dev *dev)
 	/* kill all pending urbs */
 	usb_kill_urb(dev->urb_status_query);
 	cancel_delayed_work_sync(&dev->disp_tickets_pool.completion_work);
+	cancel_work_sync(&dev->status_halt_work);
     
 	del_usbdev_from_list(dev);
     
@@ -1040,6 +1068,7 @@ static int rpusbdisp_suspend(struct usb_interface *intf, pm_message_t message)
 
 	/* Cancel any pending work that might submit new display URBs */
 	cancel_delayed_work_sync(&dev->disp_tickets_pool.completion_work);
+	cancel_work_sync(&dev->status_halt_work);
     
     /* Note: Active display URBs will complete or be unlinked.
      * Their completion handlers will see dev->is_alive = 0 and should not resubmit.
