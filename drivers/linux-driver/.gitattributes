@@ -1,0 +1,4 @@
+# The tree used to hold a mix of CRLF and LF, which showed up as hundreds of
+# phantom changed lines whenever a file was touched on the other kind of host.
+# Kernel sources are LF, full stop.
+* text=auto eol=lf
