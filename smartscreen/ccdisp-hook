@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""ccdisp-hook — bridges Claude Code hook events to the panel daemon.
+
+Reads the hook payload on stdin, asks the daemon to put a card on the screen,
+and prints the decision the pressed button maps to.  It carries no UI logic and
+no opinion of its own: whatever Claude Code offered is what the panel shows.
+
+Failure is always silent.  No daemon, no panel, a timeout, a malformed reply —
+every one of them exits 0 with empty stdout, which leaves Claude Code's own
+prompt in charge.  The screen is a convenience, never a single point of failure.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import socket
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ccdisp.proto import (Answer, Button, Card, LAYOUT_LIST,  # noqa: E402
+                          encode)
+
+CONNECT_TIMEOUT = 0.3
+ANSWER_MARGIN = 5.0
+DEFAULT_TIMEOUT_MS = 110_000
+
+RISKY = ("rm -rf", "rm -fr", "sudo ", "mkfs", "dd if=", ":(){", "chmod -R",
+         "--force", "-f origin", "curl ", "wget ", "> /dev/")
+
+
+def socket_path() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    return Path(runtime) / "ccdisp.sock"
+
+
+def bail() -> int:
+    """Hand the decision back to Claude Code's own prompt."""
+    return 0
+
+
+# -- payload shaping ------------------------------------------------------
+
+def plan_summary(plan: str) -> str:
+    """Squeeze a markdown plan into something a 320px column can carry.
+
+    The panel cannot show a plan and is not meant to: it is read on the big
+    screen. What goes here is just enough to tell one plan from another.
+    """
+    lines: list[str] = []
+    for raw in (plan or "").splitlines():
+        line = raw.strip().lstrip("#*-> ").strip()
+        if not line or set(line) <= set("-=_|"):
+            continue
+        lines.append(line)
+        if len(lines) >= 6:
+            break
+    return "\n".join(lines)
+
+
+def describe(tool: str, tool_input: dict) -> tuple[str, str]:
+    """Return (body, detail) for a tool call, in the tool's own terms."""
+    if tool == "ExitPlanMode":
+        return plan_summary(tool_input.get("plan", "")), ""
+    if tool == "Bash":
+        return tool_input.get("command", ""), tool_input.get("description", "")
+    if tool in ("Edit", "Write", "NotebookEdit"):
+        return tool_input.get("file_path", ""), ""
+    if tool == "Read":
+        return tool_input.get("file_path", ""), ""
+    if tool == "WebFetch":
+        return tool_input.get("url", ""), tool_input.get("prompt", "")[:80]
+    if tool == "WebSearch":
+        return tool_input.get("query", ""), ""
+    if tool.startswith("mcp__"):
+        return json.dumps(tool_input, ensure_ascii=False)[:200], ""
+    return json.dumps(tool_input, ensure_ascii=False)[:200], ""
+
+
+def risk_of(tool: str, body: str) -> str:
+    lowered = body.lower()
+    if tool == "Bash" and any(token in lowered for token in RISKY):
+        return "high"
+    return "low"
+
+
+MODE_WORDS = {
+    "acceptEdits": "правки без вопросов",
+    "auto": "auto-режим",
+    "bypassPermissions": "без проверок",
+    "plan": "режим плана",
+    "default": "спрашивать всё",
+}
+
+DEST_WORDS = {
+    "session": "на эту сессию",
+    "localSettings": "в настройках проекта",
+    "projectSettings": "в настройках проекта",
+    "userSettings": "в настройках пользователя",
+}
+
+
+def strip_tool(pattern: str) -> str:
+    """Bash(npm run test:*) -> npm run test:*, so the button reads as a rule."""
+    if "(" in pattern and pattern.endswith(")"):
+        return pattern[pattern.index("(") + 1:-1]
+    return pattern
+
+
+def suggestion_label(suggestion: dict) -> tuple[str, str]:
+    """Turn one permission suggestion into (label, sub) for a button.
+
+    The payload carries a union, not a list of rules: a Write call offers a
+    mode switch ("allow all edits this session") while a Bash call offers a
+    rule pattern.  Rather than hardcode a shape the docs got wrong, pull out
+    whichever identifying field is present and fall back to the type name.
+    """
+    kind = suggestion.get("type", "")
+    dest = DEST_WORDS.get(suggestion.get("destination", ""), "")
+
+    if kind == "setMode":
+        mode = suggestion.get("mode", "")
+        return f"Да, {MODE_WORDS.get(mode, mode)}", dest
+
+    if kind in ("addRules", "replaceRules"):
+        rules = suggestion.get("rules") or []
+        parts = []
+        for rule in rules:
+            if isinstance(rule, dict):
+                content = rule.get("ruleContent") or rule.get("pattern") or ""
+                tool = rule.get("toolName") or ""
+                parts.append(content or tool)
+        text = ", ".join(p for p in parts if p)
+        return strip_tool(text) or "это правило", "и больше не спрашивать"
+
+    if kind == "addDirectories":
+        dirs = suggestion.get("directories") or []
+        name = Path(dirs[0]).name if dirs else ""
+        return f"+ каталог {name}".strip(), dest
+
+    # Unknown shape: show something truthful rather than guessing at meaning.
+    pattern = suggestion.get("pattern") or ""
+    return strip_tool(pattern) or kind or "предложение", dest
+
+
+def session_label(payload: dict) -> str:
+    cwd = payload.get("cwd") or ""
+    return Path(cwd).name or "claude"
+
+
+# The terminal spells these with ⏸ and ⏵⏵, but DejaVuSans has neither glyph and
+# draws them as tofu boxes, so the badge stays in plain words.
+MODE_BADGE = {
+    "default": "manual", "plan": "plan", "acceptEdits": "edits",
+    "auto": "auto", "dontAsk": "no-ask", "bypassPermissions": "bypass",
+}
+
+
+def build_plan_card(payload: dict, suggestions: list[dict]) -> Card:
+    """The plan approval prompt, with the same three choices the terminal gives.
+
+    The options differ by the permission mode the session lands in, not by
+    allow versus deny, and a hook can set that mode: echoing back a setMode
+    suggestion through updatedPermissions switches the session for real. So the
+    panel offers the actual approve-and-switch options rather than a watered
+    down stand-in.
+    """
+    buttons = []
+    for i, suggestion in enumerate(suggestions[:2]):
+        if suggestion.get("type") != "setMode":
+            continue
+        label, sub = suggestion_label(suggestion)
+        buttons.append(Button(id=f"rule:{i}", label=label, sub=sub, color="yellow"))
+
+    if not buttons:
+        # ExitPlanMode arrives with no setMode suggestions, unlike Write, yet the
+        # terminal still offers approve-and-switch here.  Reproducing the option
+        # that exists in every configuration is not inventing a choice; auto and
+        # bypassPermissions are left alone because their availability depends on
+        # the account and the session, and a button that silently does something
+        # else is worse than a missing one.
+        buttons.append(Button(id="synth:acceptEdits",
+                              label=f"Да, {MODE_WORDS['acceptEdits']}",
+                              sub="на эту сессию", color="yellow"))
+
+    buttons.append(Button(id="allow", label="Да, вручную",
+                          sub="подтверждать каждую правку", color="green"))
+    buttons.append(Button(id="deny", label="Продолжить план", color="red"))
+
+    return Card(
+        id=payload.get("prompt_id") or "plan",
+        kind="plan",
+        layout=LAYOUT_LIST,
+        title="План готов",
+        body=describe("ExitPlanMode", payload.get("tool_input") or {})[0],
+        session_label=session_label(payload),
+        mode=MODE_BADGE.get(payload.get("permission_mode", ""), ""),
+        buttons=buttons,
+        default="deny",
+        timeout_ms=DEFAULT_TIMEOUT_MS,
+    )
+
+
+def build_card(payload: dict) -> tuple[Card, list[dict]]:
+    tool = payload.get("tool_name", "?")
+    tool_input = payload.get("tool_input") or {}
+    body, detail = describe(tool, tool_input)
+    risk = risk_of(tool, body)
+
+    options = payload.get("options") or {}
+    suggestions = [s for s in (payload.get("permission_suggestions") or [])
+                   if isinstance(s, dict)]
+
+    if tool == "ExitPlanMode":
+        return build_plan_card(payload, suggestions), suggestions
+    # Never offer to stop asking about something we flagged as dangerous, even
+    # when Claude Code would have offered it.
+    if risk == "high" or options.get("allow_without_asking") is False:
+        suggestions = []
+
+    buttons = [
+        Button(id="allow", label="Yes", color="green"),
+        Button(id="deny", label="No", color="red"),
+    ]
+    for i, suggestion in enumerate(suggestions[:2]):
+        label, sub = suggestion_label(suggestion)
+        buttons.append(Button(id=f"rule:{i}", label=label, sub=sub, color="yellow"))
+
+    card = Card(
+        id=payload.get("tool_use_id") or payload.get("prompt_id") or "card",
+        title=tool,
+        body=body,
+        detail=detail,
+        risk=risk,
+        session_label=session_label(payload),
+        mode=MODE_BADGE.get(payload.get("permission_mode", ""), ""),
+        buttons=buttons,
+        default="deny",
+        timeout_ms=DEFAULT_TIMEOUT_MS,
+    )
+    return card, suggestions
+
+
+# -- transport ------------------------------------------------------------
+
+def ask(card: Card) -> Answer | None:
+    path = socket_path()
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(CONNECT_TIMEOUT)
+        sock.connect(str(path))
+    except OSError:
+        return None
+
+    try:
+        sock.sendall(encode(card))
+        sock.settimeout(card.timeout_ms / 1000 + ANSWER_MARGIN)
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return None
+            buf += chunk
+        return Answer.from_obj(json.loads(buf.split(b"\n", 1)[0]))
+    except (OSError, ValueError, TypeError):
+        return None
+    finally:
+        sock.close()
+
+
+# -- decisions ------------------------------------------------------------
+
+_emitted: dict | None = None
+
+
+def emit(obj: dict) -> None:
+    global _emitted
+    _emitted = obj
+    json.dump(obj, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+LOG_MAX_BYTES = 512 * 1024
+
+
+def log_exchange(payload: dict) -> None:
+    """Append the hook exchange to a capped JSONL log.
+
+    Claude Code gives a hook no way to report on itself, so this file is the
+    only evidence of what was received and what went back.  It has to append:
+    an earlier version kept just the last exchange, and the first time two
+    events arrived back to back the interesting one was overwritten by the
+    one that followed it.
+    """
+    try:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        path = Path(runtime) / "ccdisp-hook.jsonl"
+        if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
+            path.unlink()
+        record = {"at": int(time.time()), "payload": payload, "emitted": _emitted}
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600),
+                  "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def build_question_card(payload: dict, question: dict, index: int,
+                        total: int) -> Card:
+    options = (question.get("options") or [])[:4]
+    # With five rows there is no vertical room left for a second line of text,
+    # so the descriptions only appear when the list is short.
+    room_for_sub = len(options) <= 3
+    buttons = [
+        Button(id=f"opt:{i}", label=opt.get("label", ""),
+               sub=(opt.get("description", "") if room_for_sub else ""),
+               color="neutral")
+        for i, opt in enumerate(options)
+    ]
+    # There is always an "Other" free-text choice in the terminal, and a
+    # touchscreen cannot type.  Say so plainly instead of hiding the option.
+    buttons.append(Button(id="terminal", label="В терминале",
+                          sub="ответить с клавиатуры", color="yellow"))
+
+    badge = MODE_BADGE.get(payload.get("permission_mode", ""), "")
+    if total > 1:
+        badge = f"{badge} {index + 1}/{total}".strip()
+
+    return Card(
+        id=f"{payload.get('prompt_id', 'q')}#{index}",
+        kind="question",
+        layout=LAYOUT_LIST,
+        # The question is the title; its header ("Охват") is a filing label and
+        # would push the actual question off a screen this size.
+        title=question.get("question", "") or question.get("header", "Вопрос"),
+        body="",
+        session_label=session_label(payload),
+        mode=badge,
+        buttons=buttons,
+        default="",  # a timeout must not answer on the user's behalf
+        timeout_ms=DEFAULT_TIMEOUT_MS,
+    )
+
+
+def handle_ask_user_question(payload: dict) -> int:
+    """Answer a multiple-choice question from the panel.
+
+    The answers ride back in decision.updatedInput, which is how the tool
+    reports a choice without the terminal dialog ever opening.  Anything the
+    panel cannot express — free text, multi-select — falls through to the
+    terminal rather than being approximated.
+    """
+    tool_input = payload.get("tool_input") or {}
+    questions = [q for q in (tool_input.get("questions") or []) if isinstance(q, dict)]
+    if not questions or any(q.get("multiSelect") for q in questions):
+        return bail()
+
+    answers: dict[str, str] = {}
+    for index, question in enumerate(questions):
+        options = (question.get("options") or [])[:4]
+        if not options:
+            return bail()
+        answer = ask(build_question_card(payload, question, index, len(questions)))
+        if answer is None or not answer.choice or answer.choice == "terminal":
+            return bail()
+        if not answer.choice.startswith("opt:"):
+            return bail()
+        chosen = int(answer.choice.split(":", 1)[1])
+        if chosen >= len(options):
+            return bail()
+        answers[question.get("question", "")] = options[chosen].get("label", "")
+
+    updated = dict(tool_input)
+    updated["answers"] = answers
+    emit({"hookSpecificOutput": {
+        "hookEventName": "PermissionRequest",
+        "decision": {"behavior": "allow", "updatedInput": updated,
+                     "message": "Отвечено с экрана"}}})
+    return 0
+
+
+def handle_permission_request(payload: dict) -> int:
+    if payload.get("tool_name") == "AskUserQuestion":
+        return handle_ask_user_question(payload)
+
+    card, suggestions = build_card(payload)
+    answer = ask(card)
+    if answer is None or not answer.choice:
+        return bail()
+
+    decision: dict = {}
+    if answer.choice == "allow":
+        decision = {"behavior": "allow", "message": "Разрешено с экрана"}
+    elif answer.choice == "deny":
+        reason = ("Продолжаем планирование" if card.kind == "plan"
+                  else "Отклонено с экрана")
+        decision = {"behavior": "deny", "message": reason}
+    elif answer.choice.startswith("rule:"):
+        index = int(answer.choice.split(":", 1)[1])
+        if index >= len(suggestions):
+            return bail()
+        decision = {"behavior": "allow",
+                    "updatedPermissions": [suggestions[index]],
+                    "message": "Разрешено с экрана, правило сохранено"}
+    elif answer.choice.startswith("synth:"):
+        mode = answer.choice.split(":", 1)[1]
+        decision = {"behavior": "allow",
+                    "updatedPermissions": [{"type": "setMode", "mode": mode,
+                                            "destination": "session"}],
+                    "message": f"Одобрено с экрана, режим {mode}"}
+    else:
+        return bail()
+
+    emit({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                 "decision": decision}})
+    return 0
+
+
+def handle_pre_tool_use(payload: dict) -> int:
+    """Fallback path for builds where PermissionRequest does not decide."""
+    card, _ = build_card(payload)
+    answer = ask(card)
+    if answer is None or not answer.choice:
+        return bail()
+
+    if answer.choice == "allow" or answer.choice.startswith("rule:"):
+        out = {"permissionDecision": "allow",
+               "permissionDecisionReason": "Разрешено с экрана"}
+    elif answer.choice == "deny":
+        out = {"permissionDecision": "deny",
+               "permissionDecisionReason": "Отклонено с экрана"}
+    else:
+        return bail()
+
+    out["hookEventName"] = "PreToolUse"
+    emit({"hookSpecificOutput": out})
+    return 0
+
+
+HANDLERS = {
+    "PermissionRequest": handle_permission_request,
+    "PreToolUse": handle_pre_tool_use,
+}
+
+
+def main() -> int:
+    mode = sys.argv[1] if len(sys.argv) > 1 else ""
+    try:
+        payload = json.load(sys.stdin)
+    except (ValueError, OSError):
+        return bail()
+    if not isinstance(payload, dict):
+        return bail()
+
+    # "capture" records the payload and decides nothing, so an event can be
+    # observed without its verdict interfering with the one under test.
+    if mode == "capture":
+        log_exchange(payload)
+        return bail()
+
+    handler = HANDLERS.get(payload.get("hook_event_name", ""))
+    if handler is None:
+        return bail()
+    try:
+        return handler(payload)
+    except Exception:  # never let a bug here block a tool call
+        return bail()
+    finally:
+        log_exchange(payload)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
