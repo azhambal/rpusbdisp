@@ -18,7 +18,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 FBIOGET_VSCREENINFO = 0x4600
 FBIOGET_FSCREENINFO = 0x4602
@@ -111,6 +111,9 @@ class Framebuffer:
         self._size = stride * yres
         self._map = mmap.mmap(self._fd, self._size, mmap.MAP_SHARED,
                               mmap.PROT_READ | mmap.PROT_WRITE)
+        # what we last wrote across the whole panel, for blit_changed(); None
+        # whenever a partial write left us unsure what is actually on screen
+        self._last: Image.Image | None = None
 
     # -- properties -------------------------------------------------------
     @property
@@ -149,6 +152,8 @@ class Framebuffer:
         w, h = image.size
         if x < 0 or y < 0 or x + w > self.width or y + h > self.height:
             raise ValueError(f"blit {w}x{h} at ({x},{y}) does not fit {self.size}")
+        self._last = (image.convert("RGB") if (x, y) == (0, 0) and image.size == self.size
+                      else None)
         data = self.pack(image, red_first)
         row_bytes = w * 2
         stride = self.info.stride
@@ -156,6 +161,30 @@ class Framebuffer:
             dst = (y + row) * stride + x * 2
             src = row * row_bytes
             self._map[dst:dst + row_bytes] = data[src:src + row_bytes]
+
+    def blit_changed(self, image: Image.Image,
+                     red_first: bool | None = None) -> int:
+        """Blit a full-screen image, writing only the part of it that moved.
+
+        The panel is driven by fb_defio, which pushes every page we dirty over
+        USB.  A clock redrawing once a second has no business re-sending 150 KB
+        of identical pixels, so we diff against the last frame and touch only
+        its bounding box.  Returns how many pixels were written.
+        """
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        if image.size != self.size:
+            raise ValueError(f"blit_changed expects {self.size}, got {image.size}")
+        if self._last is None:
+            self.blit(image, red_first=red_first)
+            return self.width * self.height
+        bbox = ImageChops.difference(self._last, image).getbbox()
+        if bbox is None:
+            return 0
+        x0, y0, x1, y1 = bbox
+        self.blit(image.crop(bbox), x0, y0, red_first=red_first)
+        self._last = image.copy()
+        return (x1 - x0) * (y1 - y0)
 
     def fill(self, color: tuple[int, int, int]) -> None:
         self.blit(Image.new("RGB", self.size, color))

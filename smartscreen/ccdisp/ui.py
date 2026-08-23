@@ -265,21 +265,3 @@ def _draw_notice(d: ImageDraw.ImageDraw, card: Card, size: tuple[int, int]) -> N
         w = d.textlength(line, font=font)
         d.text(((width - w) / 2, y), line, font=font, fill=color)
         y += 20
-
-
-def idle_screen(size: tuple[int, int], label: str, status: str,
-                stats: str = "") -> Image.Image:
-    """What the panel shows when nothing is waiting on an answer."""
-    f = fonts()
-    width, height = size
-    img = Image.new("RGB", size, BG)
-    d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, width, HEADER_H - 1], fill=HEADER_BG)
-    d.text((5, 5), shorten_middle(label, 30), font=f.sans_small, fill=DIM)
-
-    w = d.textlength(status, font=f.title)
-    d.text(((width - w) / 2, height / 2 - 16), status, font=f.title, fill=FG)
-    if stats:
-        w = d.textlength(stats, font=f.sans_small)
-        d.text(((width - w) / 2, height / 2 + 10), stats, font=f.sans_small, fill=DIM)
-    return img

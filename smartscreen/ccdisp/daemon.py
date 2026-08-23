@@ -4,6 +4,11 @@ Single-threaded selector loop over three kinds of readiness: the listening
 socket, each connected hook, and the touchscreen.  Hooks are short-lived and
 block on their answer, so a connection dropping means the tool call went away
 and its card should come off the screen.
+
+With nothing queued the panel is not blank: it shows the clock and the weather
+(see clockface.py).  A card covers that face while it is up and the clock comes
+back the moment the answer is sent, so the display is useful between questions
+instead of being a lamp that only lights up when Claude Code needs something.
 """
 
 from __future__ import annotations
@@ -21,7 +26,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from . import ui
+from . import clockface, ui
+from .config import Config
 from .fb import FbNotFound, Framebuffer
 from .proto import (Answer, Card, SRC_CANCEL, SRC_TIMEOUT, SRC_TOUCH, encode)
 from .touch import TouchNotFound, TouchReader
@@ -58,7 +64,8 @@ class Stats:
 
 
 class Daemon:
-    def __init__(self, idle_label: str = "claude code") -> None:
+    def __init__(self, cfg: Config | None = None) -> None:
+        self.cfg = cfg or Config.load()
         self.fb = Framebuffer()
         self.touch = TouchReader()
         self.sel = selectors.DefaultSelector()
@@ -67,12 +74,11 @@ class Daemon:
         # __slots__, so the buffer cannot be stashed on the socket itself
         self._buffers: dict[int, bytes] = {}
         self.stats = Stats()
-        self.idle_label = idle_label
-        self.idle_status = "готов"
+        self.face = clockface.Face(self.fb.size, self.cfg)
         self._pressed: str | None = None
         self._press_origin: tuple[int, int] | None = None
         self._hits: list[ui.HitRegion] = []
-        self._shown: tuple[str, int, str | None] | None = None
+        self._shown: object = None
         self._running = True
 
         self.path = socket_path()
@@ -89,6 +95,7 @@ class Daemon:
 
     # -- lifecycle --------------------------------------------------------
     def close(self) -> None:
+        self.face.stop()
         for pending in list(self.queue):
             self._respond(pending, "", SRC_CANCEL)
         try:
@@ -106,9 +113,10 @@ class Daemon:
 
     def run(self) -> None:
         log.info("listening on %s, panel %s", self.path, self.fb.info.path)
+        self.face.start()
         self._render()
         while self._running:
-            timeout = 0.25 if self.queue else 1.0
+            timeout = 0.25 if self.queue else self.face.timeout()
             for key, _mask in self.sel.select(timeout):
                 try:
                     key.data(key.fileobj)
@@ -210,6 +218,7 @@ class Daemon:
         self._pressed = None
         self._press_origin = None
         self._shown = None
+        self.face.invalidate()
         if source == SRC_TOUCH:
             if choice.startswith("deny"):
                 self.stats.denied += 1
@@ -230,6 +239,9 @@ class Daemon:
             x = max(0, min(self.fb.width - 1, event.x))
             y = max(0, min(self.fb.height - 1, event.y))
             if not self.queue:
+                if event.kind == "down":
+                    log.debug("tap on the idle face -> refreshing weather")
+                    self.face.refresh()
                 continue
             if event.kind == "down":
                 hit = self._hit(x, y)
@@ -266,14 +278,7 @@ class Daemon:
     # -- rendering --------------------------------------------------------
     def _render(self) -> None:
         if not self.queue:
-            state = ("idle", 0, self.idle_status)
-            if self._shown == state:
-                return
-            image = ui.idle_screen(self.fb.size, self.idle_label,
-                                   self.idle_status, self.stats.line())
-            self._hits = []
-            self._blit(image)
-            self._shown = state
+            self._render_idle()
             return
 
         pending = self.queue[0]
@@ -292,9 +297,16 @@ class Daemon:
         self._blit(image)
         self._shown = state
 
+    def _render_idle(self) -> None:
+        image = self.face.frame(self.stats.line())
+        if image is None:
+            return
+        self._hits = []
+        self._blit(image)
+
     def _blit(self, image: Image.Image) -> None:
         try:
-            self.fb.blit(image)
+            self.fb.blit_changed(image)
         except OSError as exc:
             log.error("panel write failed (%s); dropping every card", exc)
             for pending in list(self.queue):
@@ -307,7 +319,7 @@ def main() -> int:
     logging.basicConfig(level=level,
                         format="%(asctime)s %(levelname)s %(message)s")
     try:
-        daemon = Daemon()
+        daemon = Daemon(Config.load())
     except (FbNotFound, TouchNotFound) as exc:
         log.error("%s", exc)
         return 1
