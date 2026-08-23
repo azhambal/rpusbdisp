@@ -198,6 +198,9 @@ class WeatherService:
     """Keeps one Weather around, refreshed on a thread.  Never raises at readers."""
 
     RETRY_MIN = 30.0
+    # a tapped panel must not turn into a request per tap, and the touchscreen
+    # emits a stray event of its own when the daemon first opens it
+    MIN_INTERVAL = 20.0
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -239,6 +242,14 @@ class WeatherService:
         self._thread.start()
 
     def refresh_now(self) -> None:
+        """Ask for a fetch out of band; ignored if the reading is still warm."""
+        with self._lock:
+            recent = self._weather is not None and \
+                time.time() - self._weather.fetched < self.MIN_INTERVAL
+        if recent:
+            log.debug("refresh ignored: last reading is under %.0fs old",
+                      self.MIN_INTERVAL)
+            return
         self._wake.set()
 
     def stop(self) -> None:
