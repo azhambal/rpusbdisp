@@ -41,3 +41,11 @@ Debug
 Release
 build
 doc
+
+# Visual Studio local cache / build output
+.vs/
+*.vcxproj.user
+x64/
+ARM64/
+*.VC.db
+*.VC.opendb
