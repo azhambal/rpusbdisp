@@ -23,11 +23,24 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/device.h>
+#include <linux/err.h>
 #include "inc/devconf.h"
 #include "inc/usbhandlers.h"
 
 
 static struct fb_info *default_fb;
+
+/* The framebuffer is created at module init, long before any USB device has
+ * been probed, so there is no natural parent device to hang it on.  It still
+ * needs one: on registration fbcon asks video_is_primary_device(fb->device)
+ * and that helper dereferences the device without checking it for NULL, so a
+ * parentless framebuffer oopses the registering task.  At boot that task is a
+ * udev worker holding the console lock, and the machine hangs on the splash
+ * screen whenever the panel is plugged in.  A virtual root device answers the
+ * question safely: it sits on no bus, so the primary-device test says "no".
+ */
+static struct device *fb_parent_dev;
 
 struct dirty_rect {
 	int  left;
@@ -328,7 +341,7 @@ static int on_create_new_fb(struct fb_info **out_fb, struct rpusbdisp_dev *dev)
     
 	*out_fb = NULL;
     
-	fb = framebuffer_alloc(sizeof(struct rpusbdisp_fb_private), NULL); /* Device is NULL for generic fb */
+	fb = framebuffer_alloc(sizeof(struct rpusbdisp_fb_private), fb_parent_dev);
     
 	if (!fb) {
 		pr_err("Failed to initialize framebuffer device\n");
@@ -414,12 +427,33 @@ static void on_release_fb(struct fb_info *fb)
 
 int __init_or_module register_fb_handlers(void)
 {
-	return on_create_new_fb(&default_fb, NULL);
+	int ret;
+
+	fb_parent_dev = root_device_register("rpusbdisp");
+	if (IS_ERR(fb_parent_dev)) {
+		ret = PTR_ERR(fb_parent_dev);
+		fb_parent_dev = NULL;
+		pr_err("Failed to register the framebuffer parent device, error %d\n", ret);
+		return ret;
+	}
+
+	ret = on_create_new_fb(&default_fb, NULL);
+	if (ret < 0) {
+		root_device_unregister(fb_parent_dev);
+		fb_parent_dev = NULL;
+	}
+
+	return ret;
 }
 
 void unregister_fb_handlers(void)
 {
 	on_release_fb(default_fb);
+
+	if (fb_parent_dev) {
+		root_device_unregister(fb_parent_dev);
+		fb_parent_dev = NULL;
+	}
 }
 
 void fbhandler_on_all_transfer_done(struct rpusbdisp_dev *dev)

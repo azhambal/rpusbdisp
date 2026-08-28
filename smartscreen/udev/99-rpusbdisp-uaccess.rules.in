@@ -2,12 +2,13 @@
 # read its touchscreen without root.  Generated from this template by install-udev.sh,
 # which substitutes @USER@.
 #
-# Why OWNER= and not just uaccess: the kernel driver allocates both nodes with no
-# parent device (framebuffer_alloc(..., NULL) in fbhandlers.c and a bare
-# input_allocate_device() in touchhandlers.c), so they land under /devices/virtual
-# and systemd-logind never assigns them to a seat.  An unseated device gets no
-# uaccess ACL no matter how it is tagged.  The tag is kept anyway: once the driver
-# sets the parent, uaccess starts working on its own and OWNER becomes redundant.
+# Why OWNER= and not just uaccess: neither node hangs off the USB device.  The
+# framebuffer is parented to a virtual root device (fbhandlers.c registers it at
+# module init, before any device is probed) and the touchscreen comes from a bare
+# input_allocate_device() with no parent at all, so both land outside any seat and
+# systemd-logind never assigns them one.  An unseated device gets no uaccess ACL no
+# matter how it is tagged.  The tag is kept anyway: once the nodes are parented to
+# the USB interface, uaccess starts working on its own and OWNER becomes redundant.
 
 SUBSYSTEM=="graphics", KERNEL=="fb[0-9]*", ATTR{name}=="rpusbdisp-fb", TAG+="uaccess", OWNER="@USER@", GROUP="video", MODE="0660"
 SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="RoboPeakUSBDisplayTS", TAG+="uaccess", OWNER="@USER@", GROUP="input", MODE="0660"
