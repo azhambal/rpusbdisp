@@ -16,7 +16,7 @@ SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="RoboPeakUSBDisplayTS", 
 # Keep the panel out of the desktop's pointer stack.  The driver registers a
 # plain ABS_X/ABS_Y/BTN_TOUCH device, so without this X11 treats it as a second
 # mouse and every tap on the panel clicks whatever is under the desktop cursor.
-# ccdispd reads /dev/input/eventN directly and is unaffected by any of these.
+# ccdisp.clock reads /dev/input/eventN directly and is unaffected by any of these.
 SUBSYSTEM=="input", ATTRS{name}=="RoboPeakUSBDisplayTS", \
     ENV{LIBINPUT_IGNORE_DEVICE}="1", ENV{ID_INPUT}="", ENV{ID_INPUT_TOUCHSCREEN}="", \
     ENV{ID_INPUT_MOUSE}="", ENV{ID_INPUT_POINTINGSTICK}=""

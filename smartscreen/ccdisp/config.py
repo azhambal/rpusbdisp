@@ -130,6 +130,17 @@ def geolocate(timeout: float = 8.0) -> Location | None:
     return None
 
 
+def known_location(cfg: Config) -> Location | None:
+    """Config or the cached lookup — whatever is known without the network."""
+    configured = cfg.configured_location()
+    if configured is not None:
+        return configured
+    cached = _read_cached_location()
+    if cached is not None:
+        return Location(cached.latitude, cached.longitude, cfg.place or cached.place)
+    return None
+
+
 def resolve_location(cfg: Config) -> Location | None:
     """Config first, then the cached lookup, then the network."""
     configured = cfg.configured_location()

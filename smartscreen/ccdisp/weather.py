@@ -2,7 +2,7 @@
 
 Open-Meteo needs no API key and no account, which is the whole reason it is
 here: the panel should work on a fresh machine without anyone registering
-anywhere.  Fetching happens on its own thread because the daemon's selector
+anywhere.  Fetching happens on its own thread because the clock's selector
 loop owns the screen and must never sit in a socket read waiting on a weather
 server.  Readers get whatever was last fetched, plus its age, and decide for
 themselves whether that is still worth drawing.
@@ -199,7 +199,7 @@ class WeatherService:
 
     RETRY_MIN = 30.0
     # a tapped panel must not turn into a request per tap, and the touchscreen
-    # emits a stray event of its own when the daemon first opens it
+    # emits a stray event of its own when the clock first opens it
     MIN_INTERVAL = 20.0
 
     def __init__(self, cfg: Config) -> None:

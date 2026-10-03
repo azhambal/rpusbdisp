@@ -1,6 +1,6 @@
 """The idle face: a big clock over the current weather, for a 320x240 panel.
 
-Same absolute-pixel approach as ui.py — at this size nothing adaptive is worth
+Same absolute-pixel approach as every screen here (see theme.py) — at this size nothing adaptive is worth
 the complexity.  The weather icons are drawn from primitives instead of a font
 or bitmaps: DejaVu has no usable weather glyphs, and a handful of circles and
 lines scale down to the 18px forecast cells without turning to mush.
@@ -16,10 +16,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import weather as wx
 from .config import Config
-from .ui import BG, DIM, FG, HEADER_BG, HEADER_H, RULE, shorten_middle
-
-SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-SANS_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+from .theme import (BG, DIM, FG, HEADER_BG, HEADER_H, MONTHS, RULE, SANS,
+                    SANS_BOLD, WEEKDAYS, WEEKDAYS_SHORT, shorten_middle)
 
 SUN = (255, 199, 64)
 MOON = (226, 231, 248)
@@ -31,12 +29,7 @@ BOLT = (250, 206, 74)
 HAZE = (150, 156, 176)
 WARN = (220, 180, 60)
 
-WEEKDAYS = ("понедельник", "вторник", "среда", "четверг", "пятница",
-            "суббота", "воскресенье")
-WEEKDAYS_SHORT = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 MINUS = "\u2212"  # a real minus: hyphen next to 74px digits reads as a dash
-MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
-          "августа", "сентября", "октября", "ноября", "декабря")
 
 # Vertical bands.  Everything below is drawn relative to these.
 CLOCK_TOP = HEADER_H
@@ -195,40 +188,35 @@ def draw_icon(d: ImageDraw.ImageDraw, x: float, y: float, size: float,
 # -- layout ---------------------------------------------------------------
 @dataclass(frozen=True)
 class FaceState:
-    """Everything that can change what is drawn, so the daemon can skip redraws."""
+    """Everything that can change what is drawn, so unchanged seconds cost nothing."""
     minute: str
     colon: bool
     date: str
     place: str
-    stats: str
     note: str
     weather_stamp: int
     stale: bool
 
 
 def _draw_header(d: ImageDraw.ImageDraw, width: int, now: datetime,
-                 place: str, stats: str, show_date: bool) -> None:
+                 place: str, show_date: bool) -> None:
     f = fonts()
     d.rectangle([0, 0, width, HEADER_H - 1], fill=HEADER_BG)
 
     place_text = shorten_middle(place, 18) if place else ""
     place_w = d.textlength(place_text, font=f.small) if place_text else 0
-    stats_w = d.textlength(stats, font=f.small) if stats else 0
 
     if show_date:
-        # the full weekday is nicer but loses to the counters when the daemon
-        # has something to report; drop to "вс" rather than overprinting
+        # the full weekday is nicer, but a long place name wins the header:
+        # drop to "вс" rather than overprinting.  The middle stays clear for
+        # the page dots the pager draws there while you swipe.
         date_text = format_date(now)
-        # the counters sit centred, so what the date may occupy is the gap to
-        # their left edge — not the leftovers after both blocks are subtracted
-        room = ((width - stats_w) / 2 - 14) if stats else (width - place_w - 18)
+        room = (width - 52) / 2 - 10
         if d.textlength(date_text, font=f.small) > room:
             date_text = format_date(now, short=True)
         d.text((6, 5), date_text, font=f.small, fill=DIM)
     if place_text:
         d.text((width - place_w - 6, 5), place_text, font=f.small, fill=DIM)
-    if stats:
-        d.text(((width - stats_w) / 2, 5), stats, font=f.small, fill=DIM)
 
 
 def _draw_clock(d: ImageDraw.ImageDraw, width: int, now: datetime,
@@ -305,23 +293,23 @@ def _draw_strip(d: ImageDraw.ImageDraw, width: int, height: int,
         d.text((cx - tw / 2, STRIP_TOP + 31), temp, font=f.small_bold, fill=FG)
 
 
-def state_of(now: datetime, w: wx.Weather | None, place: str = "", stats: str = "",
+def state_of(now: datetime, w: wx.Weather | None, place: str = "",
           note: str = "", colon: bool = True, weather_stamp: int = 0) -> FaceState:
     return FaceState(minute=f"{now.hour:02d}:{now.minute:02d}", colon=colon,
-                     date=format_date(now), place=place, stats=stats, note=note,
+                     date=format_date(now), place=place, note=note,
                      weather_stamp=weather_stamp,
                      stale=bool(w is not None and w.stale()))
 
 
 def render(size: tuple[int, int], now: datetime, w: wx.Weather | None = None, *,
-           place: str = "", stats: str = "", note: str = "",
+           place: str = "", note: str = "",
            colon: bool = True, show_date: bool = True) -> Image.Image:
     """The whole idle face.  `note` replaces the weather block when there is none."""
     width, height = size
     img = Image.new("RGB", size, BG)
     d = ImageDraw.Draw(img)
 
-    _draw_header(d, width, now, place or (w.place if w else ""), stats, show_date)
+    _draw_header(d, width, now, place or (w.place if w else ""), show_date)
 
     if w is None:
         # nothing to show below the clock: let it take the room instead of
@@ -344,9 +332,9 @@ def render(size: tuple[int, int], now: datetime, w: wx.Weather | None = None, *,
 class Face:
     """The idle face as a unit: a weather service, a redraw budget, and frames.
 
-    Both the daemon and `python3 -m ccdisp.clock` draw the same thing, so the
-    "has anything changed, and when is the next change due" logic lives here
-    rather than being written twice and drifting apart.
+    It is the centre page of the pager, and follows the same contract as the
+    others: frame() returns None while the last frame is still accurate, and
+    timeout() says when that stops being true.
     """
 
     def __init__(self, size: tuple[int, int], cfg: Config,
@@ -371,8 +359,12 @@ class Face:
         if self.weather is not None:
             self.weather.refresh_now()
 
+    def tap(self, _x: int, _y: int) -> None:
+        """A tap on the face asks for a fresh weather reading."""
+        self.refresh()
+
     def invalidate(self) -> None:
-        """Force the next frame() to draw, e.g. after a card covered the face."""
+        """Force the next frame() to draw, e.g. after another page covered it."""
         self._shown = None
 
     # -- timing -----------------------------------------------------------
@@ -388,7 +380,7 @@ class Face:
         return max(0.5, min(30.0, 60.0 - now % 60.0))
 
     # -- drawing ----------------------------------------------------------
-    def frame(self, stats: str = "", now: datetime | None = None) -> Image.Image | None:
+    def frame(self, now: datetime | None = None) -> Image.Image | None:
         """The face to show, or None when the last one is still accurate."""
         now = now or datetime.now()
         weather = place = None
@@ -404,10 +396,10 @@ class Face:
                 note = f"погода: {error}" if error else "погода…"
         colon = now.second % 2 == 0 if self.cfg.blink_colon else True
 
-        state = state_of(now, weather, place=place or "", stats=stats, note=note,
+        state = state_of(now, weather, place=place or "", note=note,
                          colon=colon, weather_stamp=stamp)
         if state == self._shown:
             return None
         self._shown = state
-        return render(self.size, now, weather, place=place or "", stats=stats,
+        return render(self.size, now, weather, place=place or "",
                       note=note, colon=colon, show_date=self.cfg.show_date)

@@ -9,5 +9,6 @@
   "show_date": true,
   "hourly_step": 3,
   "hourly_cells": 4,
-  "geolocate": true
+  "geolocate": true,
+  "analog_seconds": true
 }

@@ -1,11 +1,9 @@
-# Панель как самостоятельные часы с погодой, без хуков Claude Code.
+# Панель как настольные часы: стрелочные, цифровые с погодой, календарь и небо.
 # install: cp systemd/ccdisp-clock.service ~/.config/systemd/user/
 #          systemctl --user enable --now ccdisp-clock
 [Unit]
-Description=ccdisp.clock — RoboPeak USB panel as a clock
+Description=ccdisp.clock — RoboPeak USB panel as a desk clock
 After=graphical-session.target
-# одна панель — один владелец
-Conflicts=ccdispd.service
 
 [Service]
 Type=simple
