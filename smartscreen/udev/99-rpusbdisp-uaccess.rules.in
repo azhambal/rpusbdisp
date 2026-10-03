@@ -1,0 +1,22 @@
+# RoboPeak Mini USB Display (fccf:a001) — let a desktop user drive the panel and
+# read its touchscreen without root.  Generated from this template by install-udev.sh,
+# which substitutes @USER@.
+#
+# Why OWNER= and not just uaccess: neither node hangs off the USB device.  The
+# framebuffer is parented to a virtual root device (fbhandlers.c registers it at
+# module init, before any device is probed) and the touchscreen comes from a bare
+# input_allocate_device() with no parent at all, so both land outside any seat and
+# systemd-logind never assigns them one.  An unseated device gets no uaccess ACL no
+# matter how it is tagged.  The tag is kept anyway: once the nodes are parented to
+# the USB interface, uaccess starts working on its own and OWNER becomes redundant.
+
+SUBSYSTEM=="graphics", KERNEL=="fb[0-9]*", ATTR{name}=="rpusbdisp-fb", TAG+="uaccess", OWNER="@USER@", GROUP="video", MODE="0660"
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}=="RoboPeakUSBDisplayTS", TAG+="uaccess", OWNER="@USER@", GROUP="input", MODE="0660"
+
+# Keep the panel out of the desktop's pointer stack.  The driver registers a
+# plain ABS_X/ABS_Y/BTN_TOUCH device, so without this X11 treats it as a second
+# mouse and every tap on the panel clicks whatever is under the desktop cursor.
+# ccdisp.clock reads /dev/input/eventN directly and is unaffected by any of these.
+SUBSYSTEM=="input", ATTRS{name}=="RoboPeakUSBDisplayTS", \
+    ENV{LIBINPUT_IGNORE_DEVICE}="1", ENV{ID_INPUT}="", ENV{ID_INPUT_TOUCHSCREEN}="", \
+    ENV{ID_INPUT_MOUSE}="", ENV{ID_INPUT_POINTINGSTICK}=""

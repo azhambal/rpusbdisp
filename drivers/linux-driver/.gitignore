@@ -1,0 +1,9 @@
+# kbuild output
+*.ko
+*.o
+*.mod
+*.mod.c
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/

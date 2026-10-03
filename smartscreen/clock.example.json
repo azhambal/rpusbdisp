@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to ~/.config/ccdisp/clock.json. Every field is optional; without latitude/longitude the location is looked up once by IP and cached in ~/.cache/ccdisp/location.json.",
+  "latitude": 55.7558,
+  "longitude": 37.6173,
+  "place": "Москва",
+  "weather": true,
+  "refresh_seconds": 600,
+  "blink_colon": true,
+  "show_date": true,
+  "hourly_step": 3,
+  "hourly_cells": 4,
+  "geolocate": true,
+  "analog_seconds": true
+}

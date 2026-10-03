@@ -1,0 +1,16 @@
+# Панель как настольные часы: стрелочные, цифровые с погодой, календарь и небо.
+# install: cp systemd/ccdisp-clock.service ~/.config/systemd/user/
+#          systemctl --user enable --now ccdisp-clock
+[Unit]
+Description=ccdisp.clock — RoboPeak USB panel as a desk clock
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/GitHub/rpusbdisp/smartscreen
+ExecStart=/usr/bin/python3 -m ccdisp.clock
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

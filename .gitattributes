@@ -1,0 +1,30 @@
+# Normalize all text files to LF in the repository. Without this, opening the
+# tree in Visual Studio rewrites every file to CRLF and git reports the whole
+# repo as modified.
+* text=auto
+
+# Windows-native project files stay CRLF in the working tree.
+*.sln    text eol=crlf
+*.slnx   text eol=crlf
+*.vcxproj         text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.props  text eol=crlf
+*.inf    text eol=crlf
+
+# Linux build inputs must stay LF or they break the kernel/autotools builds.
+*.sh       text eol=lf
+*.c        text eol=lf
+*.h        text eol=lf
+Makefile*  text eol=lf
+*.mk       text eol=lf
+*.in       text eol=lf
+*.ac       text eol=lf
+*.m4       text eol=lf
+configure  text eol=lf
+
+# Binary assets - never touch.
+*.png binary
+*.jpg binary
+*.bmp binary
+*.ico binary
+*.pdf binary

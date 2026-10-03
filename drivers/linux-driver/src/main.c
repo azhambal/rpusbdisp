@@ -36,7 +36,7 @@ static struct usb_class_driver lcd_class = {
 
 // Frame rate parameter for display refresh
 int fps = 0;
-module_param(fps, int, 0);
+module_param(fps, int, 0444);
 MODULE_PARM_DESC(fps, "Specify the frame rate used to refresh the display (override kernel config)");
 
 

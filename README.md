@@ -1,221 +1,116 @@
-RoboPeak Mini USB Display
-====================================
+<h1 align="center">RoboPeak Mini USB Display — настольные часы</h1>
 
-Drivers and Tools for RoboPeak Mini USB Display Project
+<p align="center">
+  Крошечный USB-экран 320×240 с тачем превращается в настольные часы:<br>
+  четыре страницы, которые листаются пальцем, как StandBy на лежащем телефоне.
+</p>
 
-Visit RoboPeak Website for details.
+<p align="center">
+  <img src="smartscreen/screenshots/swipe.gif" width="560" alt="Свайпы между страницами часов">
+</p>
 
-Demo Video
-====================================
-For International Users:
-[YouTube Video](http://www.youtube.com/watch?v=KCNrq1hb99U)
+<p align="center">
+  <a href="#быстрый-старт">Быстрый старт</a> ·
+  <a href="#страницы">Страницы</a> ·
+  <a href="#что-внутри">Что внутри</a> ·
+  <a href="smartscreen/README.md">Подробно о часах</a> ·
+  <a href="drivers/linux-driver/README.md">Драйвер</a>
+</p>
 
-国内用户(Chinese users):
-[土豆视频](http://www.tudou.com/programs/view/rJd1TwZzRZk/)
+---
 
+## Страницы
 
-How to Integrate the Driver in the Kernel build operation
-=========================================================
-    1) Copy the content of linux-driver folder in your kernel source (ideally in a new folder called robopeak inside the drivers/video folder)
-    2) Replace the Makefile file by the NewMakefile one
-    3) Edit the Kconfig file of the drivers/video file and insert the line
-       * source "drivers/video/robopeak/Kconfig"
-       after the line
-       * comment "Frame buffer hardware drivers"
-    4) Change the .config of your kernel through the menuconfig
-       * make ARCH=your_architecture your_defconfig menuconfig
-    5) In the menu "Device Drivers -> Graphic supports -> Support for frame buffer display" a Robopeak USB Display menu appears
-    6) Set the Robopeak USB Display as module (this selection activates automatically the requested frame buffer option, see Prerequites of How to build the Linux Kernel Driver chapter)
-    7) Generate your kernel
-
-
-
-
-How to Build the Linux Kernel Driver
-====================================
-Here we only provide you the basic building process. Please refer to the related documents for details.
-
-
-I. Prerequisite
------------------
-As a linux kernel driver, it requires you to provide the target system's kernel header or the full source code to build.
-
-Before building the driver, you may need to config the linux kernel to enable the features required by the driver. Otherwise, the building process will fail.
-
-If you want to use the driver with your current kernel (without recompiling the kernel and replacing it with the current one), please make sure the kernel header, the config and the related build scripts you used is belonged to this version of kernel.
-
-Please make sure the following kernel features have been enabled. (via make menuconfig under your kernel source)
-
-    0) framebuffer support (CONFIG_FB=y)
-
-    1) deferred io support in framebuffer (CONFIG_FB_DEFERRED_IO=y)
-
-    2) fb file operation support
-
-       * CONFIG_FB_CFB_FILLRECT=y
-       * CONFIG_FB_CFB_COPYAREA=y
-       * CONFIG_FB_CFB_IMAGEBLIT=y
-       * CONFIG_FB_SYS_FILLRECT=m
-       * CONFIG_FB_SYS_COPYAREA=m
-       * CONFIG_FB_SYS_IMAGEBLIT=m
-       * CONFIG_FB_SYS_FOPS=m
-       * CONFIG_FB_MODE_HELPERS=y
-
-    3) Input event support (Generic input layer support)
-
-You may modify the .config directly to enable these features.
-
-Alternatively, here is a tricky method:
-    Select the Displaylink display driver ( Device Drivers-> Graphics support -> Support for frame buffer devices-> Displaylink USB Framebuffer support) as an external module. By doing so, the above features will be selected by the menuconfiger.  
-
-You may need to recompile the kernel if the above configuration changes have been made.
-
-II. Native Build - build the kernel driver for the current machine
------------------------------------------------------------------
-
-You should have followed the steps described in the prerequisite section already. Here let's assume the location of the Linux kernel header(or source) is ~/workspace/linux-kernel.
-
-Enter the Robopeak USB Displayer linux kernel driver folder (i.e. rpusbdisp/drivers/linux-driver), using the following command:
-
-```shell
-$ make KERNEL_SOURCE_DIR=~/workspace/linux-kernel
+```
+стрелочные  ←  цифровые с погодой  →  календарь  →  небо
 ```
 
-You should find the build result under the current folder: rp_usbdisplay.ko
+Панель стартует с цифровых часов в центре. Свайп вбок — соседняя страница,
+касание цифровых часов — свежая погода.
 
-III. Cross Compile - build the kernel driver for other platforms
-------------------------------------------------------------------
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="smartscreen/screenshots/analog.png" alt="Стрелочные часы"><br>
+      <b>Стрелочные</b><br>
+      <sub>Сглаженные стрелки, секундная тикает каждую секунду; дата в углу</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="smartscreen/screenshots/clock.png" alt="Цифровые часы с погодой"><br>
+      <b>Цифровые с погодой — дом</b><br>
+      <sub>Сейчас, «ощущается», ветер, влажность и прогноз на ближайшие часы</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="smartscreen/screenshots/calendar.png" alt="Календарь"><br>
+      <b>Календарь</b><br>
+      <sub>Месяц, сегодня, выходные и праздники РФ, отсчёт до ближайшего</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="smartscreen/screenshots/sky.png" alt="Небо"><br>
+      <b>Небо</b><br>
+      <sub>Путь солнца за день, долгота дня, фаза луны</sub>
+    </td>
+  </tr>
+</table>
 
-You should have followed the steps described in the prerequisite section already. Here let's assume the location of the  Linux kernel header(or source) is ~/workspace/target-linux-kernel.
+### Небо в течение дня
 
-Let's also assume the target platform is ARMv7. We need to use the cross-compiler : arm-linux-gnueabihf-gcc.
+Цвет неба следует за настоящей высотой солнца над горизонтом: синий днём,
+тёплая полоса на рассвете и закате, звёзды ночью. Солнце стоит там, где оно
+сейчас на самом деле. Всё считается локально по координатам, без сети.
 
-Enter the following command to build the kernel driver for the target:
-```shell
-make CROSS_COMPILE=arm-linux-gnueabihf- ARCH=arm KERNEL_SOURCE_DIR=~/workspace/target-linux-kernel
+<p align="center">
+  <img src="smartscreen/screenshots/sky-day.png" alt="Рассвет, полдень, закат и ночь">
+</p>
+
+## Быстрый старт
+
+Нужны Linux, Python 3 с Pillow и `dkms`. Проверено на Ubuntu 26.04 с ядром 7.0 и Pillow 12.
+
+```sh
+# 1. драйвер — DKMS сам пересоберёт его при обновлении ядра
+sudo apt install dkms python3-pil fonts-dejavu-core
+sudo drivers/linux-driver/dkms-install.sh
+sudo modprobe rp_usbdisplay
+
+# 2. доступ к экрану и тачу без root
+sudo smartscreen/install-udev.sh
+
+# 3. часы как служба
+cp smartscreen/systemd/ccdisp-clock.service ~/.config/systemd/user/
+systemctl --user enable --now ccdisp-clock
 ```
 
-You should find the build result under the current folder: rp_usbdisplay.ko
+Город определяется по IP один раз и кэшируется. Задать его явно, отключить
+секундную стрелку и прочее — в `~/.config/ccdisp/clock.json`, образец в
+[`smartscreen/clock.example.json`](smartscreen/clock.example.json). Погода —
+[Open-Meteo](https://open-meteo.com/): без ключей и регистрации.
 
+> **Экран чёрный после обновления Ubuntu?** Скорее всего, ядро переставилось с
+> той же строкой версии, и DKMS не пересобрал модуль. Рецепт — в разделе
+> [«Если экран чёрный»](smartscreen/README.md#если-экран-чёрный).
 
-How to Use the Kernel Driver
-============================
+## Что внутри
 
-I. Deploy the dependencies modules
----------------------------------
-If you had re-configed and recompiled the Linux kernel as required by the building process, you need to deploy the new kernel and all the kernel modules to the target system.
+| | |
+|---|---|
+| [`smartscreen/`](smartscreen/README.md) | Часы: страницы, листалка, погода. Python и Pillow, без других зависимостей |
+| [`drivers/linux-driver/`](drivers/linux-driver/README.md) | Драйвер ядра: framebuffer `rpusbdisp-fb` и тач `RoboPeakUSBDisplayTS`. Приведён к API ядер 6.x и 7.x |
+| [`drivers/usermode-sdk/`](drivers/usermode-sdk) | SDK RoboPeak для Windows, macOS и Linux без драйвера ядра |
+| [`drivers/Usb*`](drivers), [`docs/`](docs) | Драйверы Windows 11 (UMDF, Indirect Display, HID-тач) и их документация |
+| [`docs/upstream-readme.md`](docs/upstream-readme.md) | Исходная инструкция RoboPeak: сборка в дереве ядра, кросс-компиляция, X11 |
 
-To be specific, you need to deploy AT LEAST the following kernel module to the  target system's /lib/module/<target_kernel_version> folder along with the new kenrel image:
+**Устройство:** RoboPeak Mini USB Display, он же DFRobot DFR0275. Экран
+320×240 RGB565, резистивный тач, USB 1.1 full speed, `fccf:a001`.
 
-  * sysfillrect.ko
-  * syscopyarea.ko
-  * sysimgblt.ko
-  * fb_sys_fops.ko
+Скорость USB и задаёт характер интерфейса. Кадр уходит по USB не чаще 16 раз в
+секунду, поэтому часы отправляют только изменившийся прямоугольник: мигание
+двоеточия — 0,7 % экрана. Переход между страницами короткий и рассчитан по
+времени, а не по числу кадров.
 
-II. Deploy the compiled kernel driver
--------------------------------------
+## Благодарности и лицензия
 
-Reboot the target system to using the new kernel. Copy the compiled usb display driver (rp_usbdisplay.ko) to the following location:
-
-    /lib/modules/`uname -r`/kernel
-
-Enter the above folder and execute the following command:
-
-    depmod 
-
-III. Load the kernel driver
----------------------------
-Once you had deployed the kernel driver and all of its dependencies, you can ask the kernel to load the driver using :
-
-    modprobe rp_usbdisplay
-
-By default the frame per seconds is set to 16. You can change it with the fps option when you load the driver :
-
-    modprobe rp_usbdisplay fps=25
-
-In this case the frame per seconds is set to 25.
-
-If you want to let the kernel load the driver automatically each time when the system starts, you can added the following line into the file /etc/modules:
-    rp_usbdisplay
-
-(i.e. echo rp_usbdisplay >> /etc/modules)
-
-
-IV. Verify the driver
----------------------
-Using the lsmod command to check whether the driver has been loaded correctlly. You should get the output similar to the following text:
-
-```shell
-# lsmod
-Module                  Size  Used by
-rp_usbdisplay          12171  0 [permanent]
-fb_sys_fops             1412  1 rp_usbdisplay
-sysimgblt               2199  1 rp_usbdisplay
-sysfillrect             3295  1 rp_usbdisplay
-syscopyarea             3112  1 rp_usbdisplay
-```
-
-Also, you should find the following message in the dmesg log:
-
-```log
-[    7.535799] input: RoboPeakUSBDisplayTS as /devices/virtual/input/input0
-[    7.548115] usbcore: registered new interface driver rp-usbdisp
-```
-
-To verify the driver work with the RoboPeak USB Display, connect the display to the target system via the USB cable. The display should display RoboPea Logo and turn to black (or something else) for about 3 second.
-
-If the display keeps showing the white noise animation and the message : Waiting for signal, you should check the dmesg to see what happens. Normally, the driver will prompt the following message when the display has been pluged in :
-
-```log
-[ 1814.173232] rp-usbdisp 4-1:1.0: RP USB Display found (#1), Firmware Version: X.XX, S/N: XXXXXXXXXXXX
-```
-
-Once the driver recognizes the display, a framebuffer device will be created. (e.g. /dev/fb0)
-
-Use the following command to see whether framebuffer device is belonged to the USB display:
-
-```bash
-# cat /proc/fb  
-2 rpusbdisp-fb <
-```
-
-In the above example, /dev/fb2 is the related framebuffer device. To test whether the framebuffer device works, you may using the following command:
-
-```bash
-# cat /dev/urandom > /dev/fb2
-```
-
-You should see the display screen is filled with random color dots.
-
-V. Make X11 output to the USB display
--------------------------------------
-
-There is a sample X11 config file under the source folder: rpusbdisp/drivers/linux-driver/xserver_conf/10-disp.conf. You can use this sample file as the template to make X11 on your target system to output to the USB display.
-
-STEP1: determine the framebuffer device name of the display.
-  use the command cat /proc/fb
-
-STEP2: modify the 10-disp.conf, change the framebuffer device name to the one determined in STEP1.
-
-STEP3: copy the file 10-disp.conf to the X11's config folder (/usr/share/X11/xorg.conf.d for most systems).
-
-STEP4: restart the X11 server
-
-The X11 desktop should appear on the USB display.
-
-User Mode SDK
-=============
-
-Besides the Linux kernel driver, we also provide a user mode sdk which is available on Windows, OS X, and Linux.
-
-You can find the SDK in the [drivers/usermode-sdk](https://github.com/cnwzhjs/rpusbdisp/tree/master/drivers/usermode-sdk) subdirectory.
-
-Windows Driver Plan
-===================
-
-For a Windows 11 user-mode driver stack (UMDF USB transport, Indirect Display Driver, and HID multitouch mini-driver), see the plan in [docs/windows-umdf-driver-plan.md](docs/windows-umdf-driver-plan.md). It reuses the protocol knowledge from the Linux driver while outlining the Windows-specific architecture, packaging, and HLK validation steps.
-
-Contact Us
-====================================
-Website: www.RoboPeak.com
-Email:   support@robopeak.com
+Оригинальный драйвер и SDK — [RoboPeak](https://github.com/robopeak/rpusbdisp)
+(Shikai Chen). Код распространяется под [GPL-2.0](LICENSE).
