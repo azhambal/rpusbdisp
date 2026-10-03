@@ -29,6 +29,13 @@ DEFAULT_FB_NAME = "rpusbdisp-fb"
 # four fb_bitfield (offset, length, msb_right) triples for r/g/b/transp.
 _VAR_PREFIX = struct.Struct("=20I")
 
+# 565 packing tables for Framebuffer.pack(), one 8-bit channel in, one byte's
+# share out.  Each pair adds up to at most 255, so ImageChops.add never clips.
+_HIGH5 = [v & 0xF8 for v in range(256)]            # bits 15..11 -> high byte 7..3
+_G_HIGH3 = [v >> 5 for v in range(256)]            # bits 10..8  -> high byte 2..0
+_G_LOW3 = [(v >> 2 & 7) << 5 for v in range(256)]  # bits 7..5   -> low byte 7..5
+_LOW5 = [v >> 3 for v in range(256)]               # bits 4..0   -> low byte 4..0
+
 
 @dataclass(frozen=True)
 class Bitfield:
@@ -132,18 +139,20 @@ class Framebuffer:
     def pack(self, image: Image.Image, red_first: bool | None = None) -> bytes:
         """Convert an RGB image to this panel's little-endian 16-bit format.
 
-        Pillow's "BGR;16" packer always puts red in the high bits (plain
-        RGB565).  This panel wants red in the low bits, so we hand Pillow the
-        channels pre-swapped and let it do the bit packing at C speed.
+        Pillow 12 dropped the "BGR;16" mode and has no raw 565 packer, so we
+        build the two bytes of each pixel as "L" bands through lookup tables
+        and let "LA" interleave them (low byte first) — still all at C speed.
+        This panel wants red in the low bits, so blue goes in the high five.
         `red_first` overrides the layout the driver reported, which the M0
         calibration tool uses to show both orders side by side.
         """
         if image.mode != "RGB":
             image = image.convert("RGB")
-        if self.info.red_first if red_first is None else red_first:
-            r, g, b = image.split()
-            image = Image.merge("RGB", (b, g, r))
-        return image.convert("BGR;16").tobytes()
+        r, g, b = image.split()
+        hi, lo = (b, r) if (self.info.red_first if red_first is None else red_first) else (r, b)
+        high = ImageChops.add(hi.point(_HIGH5), g.point(_G_HIGH3))
+        low = ImageChops.add(g.point(_G_LOW3), lo.point(_LOW5))
+        return Image.merge("LA", (low, high)).tobytes()
 
     # -- drawing ----------------------------------------------------------
     def blit(self, image: Image.Image, x: int = 0, y: int = 0,
