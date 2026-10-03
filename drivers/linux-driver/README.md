@@ -28,7 +28,7 @@ sudo modprobe rp_usbdisplay
 
 ## Сборка внутри дерева ядра
 
-Для варианта с `Kconfig` см. раздел в корневом [README](../../README.md);
+Для варианта с `Kconfig` см. [исходную инструкцию RoboPeak](../../docs/upstream-readme.md);
 `NewMakefile` предназначен для замены `Makefile` при таком способе.
 
 ## Состояние кода
